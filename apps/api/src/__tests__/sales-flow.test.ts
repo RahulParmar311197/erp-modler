@@ -498,6 +498,170 @@ describe("Sales flow", () => {
   });
 
 
+  it("allows only one concurrent shipment when both consume the final remaining quantity", async () => {
+    const app = await buildApp();
+
+    try {
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          tenantCode: "MODLER",
+          email: "admin@modler.local",
+          password: "ModlerAdmin@2026!",
+        },
+      });
+
+      expect(login.statusCode).toBe(200);
+
+      const headers = {
+        authorization: `Bearer ${login.json().data.token}`,
+      };
+
+      const organizationId =
+        "0acbfc53-94fe-457c-8e43-b048dc454a3d";
+      const customerId =
+        "d28652d4-c3c5-4411-aa6d-4d4cabe48d58";
+      const itemId =
+        "09df66f2-e266-444a-b1d6-082798d776e2";
+      const uomId =
+        "46e2c63b-95ad-4069-a946-b3ada5587b9c";
+      const warehouseId =
+        "88c410b4-c183-443d-9d11-4cdf6b3e590c";
+      const binId =
+        "b16caf8c-d84e-4ea1-8065-6864007a1e59";
+
+      const suffix = Date.now();
+
+      const create = await app.inject({
+        method: "POST",
+        url: "/api/sales-orders",
+        headers,
+        payload: {
+          orderNumber: `SO-CONCURRENT-${suffix}`,
+          organizationId,
+          customerId,
+          requestedDate: "2026-08-15",
+          currency: "INR",
+          lines: [
+            {
+              itemId,
+              uomId,
+              quantity: 1,
+              unitPrice: 150,
+            },
+          ],
+        },
+      });
+
+      expect(create.statusCode).toBe(201);
+
+      const order = create.json().data;
+      const salesOrderId = order.id;
+      const salesOrderLineId = order.lines[0].id;
+
+      const submit = await app.inject({
+        method: "POST",
+        url: `/api/sales-orders/${salesOrderId}/submit`,
+        headers,
+        payload: {},
+      });
+
+      expect(submit.statusCode).toBe(200);
+
+      const approve = await app.inject({
+        method: "POST",
+        url: `/api/sales-orders/${salesOrderId}/approve`,
+        headers,
+        payload: {},
+      });
+
+      expect(approve.statusCode).toBe(200);
+
+      const [first, second] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: `/api/sales-orders/${salesOrderId}/ship`,
+          headers,
+          payload: {
+            shipmentNumber: `SHIP-CONCURRENT-1-${suffix}`,
+            warehouseId,
+            binId,
+            lines: [
+              {
+                salesOrderLineId,
+                quantity: 1,
+              },
+            ],
+          },
+        }),
+        app.inject({
+          method: "POST",
+          url: `/api/sales-orders/${salesOrderId}/ship`,
+          headers,
+          payload: {
+            shipmentNumber: `SHIP-CONCURRENT-2-${suffix}`,
+            warehouseId,
+            binId,
+            lines: [
+              {
+                salesOrderLineId,
+                quantity: 1,
+              },
+            ],
+          },
+        }),
+      ]);
+
+      const results = [first, second];
+
+      const successful = results.filter(
+        (result) => result.statusCode === 201,
+      );
+
+      const rejected = results.filter(
+        (result) => result.statusCode === 400,
+      );
+
+      expect(successful).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      const finalOrder = await app.inject({
+        method: "GET",
+        url: `/api/sales-orders/${salesOrderId}`,
+        headers,
+      });
+
+      expect(finalOrder.statusCode).toBe(200);
+
+      const finalData = finalOrder.json().data;
+
+      expect(finalData.status).toBe("SHIPPED");
+      expect(finalData.lines[0].shippedQty).toBe("1");
+
+      const shipments = await app.inject({
+        method: "GET",
+        url: "/api/shipments",
+        headers,
+      });
+
+      expect(shipments.statusCode).toBe(200);
+
+      const createdShipments = shipments
+        .json()
+        .data
+        .filter(
+          (shipment: { shipmentNumber: string }) =>
+            shipment.shipmentNumber === `SHIP-CONCURRENT-1-${suffix}` ||
+            shipment.shipmentNumber === `SHIP-CONCURRENT-2-${suffix}`,
+        );
+
+      expect(createdShipments).toHaveLength(1);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("supports partial shipment and completes on the remaining quantity", async () => {
     const app = await buildApp();
 

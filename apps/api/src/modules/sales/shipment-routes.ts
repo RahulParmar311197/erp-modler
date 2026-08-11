@@ -371,17 +371,60 @@ export async function shipmentRoutes(app: FastifyInstance, prisma: PrismaClient)
 
             const shipmentQty = requestedLine.quantity!;
 
-            const orderedQty = Number(orderLine.quantity);
-            const alreadyShipped = Number(orderLine.shippedQty);
-            const remainingQty = orderedQty - alreadyShipped;
+        /*
+         * Atomically reserve the requested shipment quantity.
+         *
+         * PostgreSQL serializes this UPDATE on the SalesOrderLine row.
+         * The WHERE clause prevents shippedQty from exceeding quantity.
+         */
+          const reservedRows = await tx.$queryRaw<
+            Array<{
+              id: string;
+              quantity: unknown;
+              shippedQty: unknown;
+              itemId: string;
+            }>
+          >`
+            UPDATE "SalesOrderLine"
+            SET "shippedQty" = "shippedQty" + ${shipmentQty}
+            WHERE "id" = ${orderLine.id}
+              AND "shippedQty" + ${shipmentQty} <= "quantity"
+            RETURNING
+              "id",
+              "quantity",
+              "shippedQty",
+              "itemId"
+          `;
 
-            if (shipmentQty > remainingQty) {
-              throw new Error(
-                `Cannot ship ${shipmentQty} of ${orderLine.item.sku}. Remaining quantity: ${remainingQty}`,
-              );
-            }
+        const lockedLine = reservedRows[0];
 
-            const balance =
+        if (!lockedLine) {
+          const currentLine = await tx.salesOrderLine.findUnique({
+            where: {
+              id: orderLine.id,
+            },
+          });
+
+          const currentShippedQty = currentLine
+            ? Number(currentLine.shippedQty)
+            : 0;
+
+          const currentOrderedQty = currentLine
+            ? Number(currentLine.quantity)
+            : 0;
+
+          const remainingQty =
+            currentOrderedQty - currentShippedQty;
+
+          throw new Error(
+            `Cannot ship ${shipmentQty} of ${orderLine.item.sku}. Remaining quantity: ${remainingQty}`,
+          );
+        }
+
+        const alreadyShipped =
+          Number(lockedLine.shippedQty) - shipmentQty;
+
+        const balance =
               await tx.stockBalance.findFirst({
                 where: {
                   tenantId: claims.tenantId,
@@ -426,17 +469,6 @@ export async function shipmentRoutes(app: FastifyInstance, prisma: PrismaClient)
               },
             });
 
-            const newShippedQty =
-              alreadyShipped + shipmentQty;
-
-            await tx.salesOrderLine.update({
-              where: {
-                id: orderLine.id,
-              },
-              data: {
-                shippedQty: newShippedQty,
-              },
-            });
 
             await tx.stockMovement.create({
               data: {
