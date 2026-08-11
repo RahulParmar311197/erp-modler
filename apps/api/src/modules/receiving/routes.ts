@@ -235,7 +235,10 @@ export async function goodsReceiptRoutes(app: FastifyInstance) {
         }
       }
 
-      const receipt = await prisma.$transaction(async (tx) => {
+      let receipt;
+
+      try {
+        receipt = await prisma.$transaction(async (tx) => {
         const created = await tx.goodsReceipt.create({
           data: {
             tenantId: claims.tenantId,
@@ -318,9 +321,12 @@ export async function goodsReceiptRoutes(app: FastifyInstance) {
             },
           });
 
-          await tx.purchaseOrderLine.update({
+          const updatedPoLine = await tx.purchaseOrderLine.updateMany({
             where: {
               id: poLine.id,
+              receivedQty: {
+                lte: poLine.quantity.minus(quantity),
+              },
             },
             data: {
               receivedQty: {
@@ -328,6 +334,10 @@ export async function goodsReceiptRoutes(app: FastifyInstance) {
               },
             },
           });
+
+          if (updatedPoLine.count !== 1) {
+            throw new Error("RECEIVED_QUANTITY_EXCEEDED");
+          }
         }
 
         const updatedLines = await tx.purchaseOrderLine.findMany({
@@ -358,7 +368,25 @@ export async function goodsReceiptRoutes(app: FastifyInstance) {
         });
 
         return created;
-      });
+        });
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "RECEIVED_QUANTITY_EXCEEDED"
+        ) {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message:
+                  "Received quantity cannot exceed the purchase order quantity",
+              },
+            ],
+          });
+        }
+
+        throw error;
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,
