@@ -1,0 +1,23 @@
+node_modules/
+.env
+dist/
+.next/
+coverage/
+
+# Generated Prisma client
+packages/database/generated/
+
+# Local agent/tooling caches
+**/.agents/
+**/.claude/
+**/.windsurf/
+**/skills-lock.json
+
+# Editor / OS files
+.DS_Store
+.vscode/
+.idea/
+
+# Local Prisma backups
+packages/database/prisma/*.backup-*
+
