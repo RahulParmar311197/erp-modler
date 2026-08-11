@@ -173,6 +173,23 @@ export async function goodsReceiptRoutes(app: FastifyInstance) {
           });
         }
 
+        const alreadyReceived = poLine.receivedQty ?? 0;
+        const requestedQuantity = line.quantity!;
+
+        if (
+          alreadyReceived.plus(requestedQuantity).gt(poLine.quantity)
+        ) {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message:
+                  "Received quantity cannot exceed the purchase order quantity",
+              },
+            ],
+          });
+        }
+
         const warehouse = await prisma.warehouse.findFirst({
           where: {
             id: line.warehouseId,
