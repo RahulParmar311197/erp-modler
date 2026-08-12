@@ -33,27 +33,215 @@ export async function journalRoutes(
           requirePermission(request, reply, "user.view"),
       ],
     },
-    async (request) => {
+    async (request, reply) => {
       const claims = request.user as AuthClaims;
 
-      const entries = await prisma.journalEntry.findMany({
-        where: {
-          tenantId: claims.tenantId,
-        },
-        orderBy: {
-          entryDate: "desc",
-        },
-        include: {
-          organization: true,
-          lines: {
-            include: {
-              account: true,
+      const query = request.query as {
+        fromDate?: unknown;
+        toDate?: unknown;
+        status?: unknown;
+        sourceType?: unknown;
+        organizationId?: unknown;
+        page?: unknown;
+        pageSize?: unknown;
+      };
+
+      const parseDate = (value: unknown): Date | null | undefined => {
+        if (value === undefined || value === null || value === "") {
+          return null;
+        }
+
+        if (
+          typeof value !== "string" ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(value)
+        ) {
+          return undefined;
+        }
+
+        const date = new Date(`${value}T00:00:00.000Z`);
+
+        return Number.isNaN(date.getTime()) ? undefined : date;
+      };
+
+      const fromDate = parseDate(query.fromDate);
+      const toDate = parseDate(query.toDate);
+
+      if (
+        (query.fromDate !== undefined && fromDate === undefined) ||
+        (query.toDate !== undefined && toDate === undefined)
+      ) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message:
+                "fromDate and toDate must be valid dates in YYYY-MM-DD format",
+            },
+          ],
+        });
+      }
+
+      if (fromDate && toDate && fromDate > toDate) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "fromDate cannot be after toDate",
+            },
+          ],
+        });
+      }
+
+      const status =
+        typeof query.status === "string" && query.status.trim()
+          ? query.status.trim().toUpperCase()
+          : undefined;
+
+      if (status && status !== "DRAFT" && status !== "POSTED") {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "status must be DRAFT or POSTED",
+            },
+          ],
+        });
+      }
+
+      const sourceType =
+        typeof query.sourceType === "string" && query.sourceType.trim()
+          ? query.sourceType.trim()
+          : undefined;
+
+      const organizationId =
+        typeof query.organizationId === "string" &&
+        query.organizationId.trim()
+          ? query.organizationId.trim()
+          : undefined;
+
+      const parsePositiveInt = (
+        value: unknown,
+        fallback: number,
+      ): number | undefined => {
+        if (value === undefined || value === null || value === "") {
+          return fallback;
+        }
+
+        const parsed = Number(value);
+
+        if (!Number.isInteger(parsed) || parsed < 1) {
+          return undefined;
+        }
+
+        return parsed;
+      };
+
+      const page = parsePositiveInt(query.page, 1);
+      const pageSize = parsePositiveInt(query.pageSize, 25);
+
+      if (page === undefined || pageSize === undefined) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "page and pageSize must be positive integers",
+            },
+          ],
+        });
+      }
+
+      if (pageSize > 100) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "pageSize cannot exceed 100",
+            },
+          ],
+        });
+      }
+
+      const where = {
+        tenantId: claims.tenantId,
+        ...(status
+          ? {
+              status: status as "DRAFT" | "POSTED",
+            }
+          : {}),
+        ...(sourceType ? { sourceType } : {}),
+        ...(organizationId ? { organizationId } : {}),
+        ...(fromDate || toDate
+          ? {
+              entryDate: {
+                ...(fromDate ? { gte: fromDate } : {}),
+                ...(toDate
+                  ? {
+                      lte: new Date(
+                        toDate.getTime() +
+                          24 * 60 * 60 * 1000 -
+                          1,
+                      ),
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+      };
+
+      const [entries, totalCount, totals] = await prisma.$transaction([
+        prisma.journalEntry.findMany({
+          where,
+          orderBy: [
+            {
+              entryDate: "desc",
+            },
+            {
+              id: "desc",
+            },
+          ],
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+          include: {
+            organization: true,
+            lines: {
+              include: {
+                account: true,
+              },
             },
           },
-        },
-      });
+        }),
+        prisma.journalEntry.count({
+          where,
+        }),
+        prisma.journalLine.aggregate({
+          where: {
+            tenantId: claims.tenantId,
+            journalEntry: where,
+          },
+          _sum: {
+            debit: true,
+            credit: true,
+          },
+        }),
+      ]);
 
-      return { data: entries };
+      const debit = Number(totals._sum.debit ?? 0);
+      const credit = Number(totals._sum.credit ?? 0);
+
+      return {
+        data: entries,
+        meta: {
+          page,
+          pageSize,
+          totalCount,
+          totalPages: Math.ceil(totalCount / pageSize),
+          totals: {
+            debit,
+            credit,
+            balance: debit - credit,
+          },
+        },
+      };
     },
   );
 
