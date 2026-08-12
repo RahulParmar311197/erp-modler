@@ -19,6 +19,9 @@ model Tenant {
   auditEvents      AuditEvent[]
   customers        Customer[]
   customerPayments CustomerPayment[]
+  glAccounts      GlAccount[]
+  journalEntries  JournalEntry[]
+  journalLines    JournalLine[]
   goodsReceipts    GoodsReceipt[]
   items            Item[]
   itemGroups       ItemGroup[]
@@ -52,6 +55,8 @@ model Organization {
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
   customers      Customer[]
+  glAccounts     GlAccount[]
+  journalEntries JournalEntry[]
   locations      Location[]
   parent         Organization?    @relation("OrganizationTree", fields: [parentId], references: [id])
   children       Organization[]   @relation("OrganizationTree")
@@ -449,6 +454,64 @@ model GoodsReceiptLine {
   @@index([purchaseOrderLineId])
 }
 
+model GlAccount {
+  id             String          @id @default(uuid())
+  tenantId       String
+  organizationId String?
+  code           String
+  name           String
+  type           GlAccountType
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  organization   Organization?   @relation(fields: [organizationId], references: [id])
+  journalLines   JournalLine[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, type])
+  @@index([tenantId, organizationId])
+}
+
+model JournalEntry {
+  id             String             @id @default(uuid())
+  tenantId       String
+  organizationId String
+  entryNumber    String
+  entryDate      DateTime           @default(now())
+  description    String?
+  sourceType     String?
+  sourceId       String?
+  status         JournalEntryStatus @default(POSTED)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  organization   Organization       @relation(fields: [organizationId], references: [id])
+  lines          JournalLine[]
+
+  @@unique([tenantId, entryNumber])
+  @@index([tenantId, entryDate])
+  @@index([tenantId, sourceType, sourceId])
+  @@index([tenantId, status])
+}
+
+model JournalLine {
+  id             String       @id @default(uuid())
+  tenantId       String
+  journalEntryId String
+  accountId      String
+  debit          Decimal      @default(0)
+  credit         Decimal      @default(0)
+  description    String?
+  createdAt      DateTime     @default(now())
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  journalEntry   JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account        GlAccount    @relation(fields: [accountId], references: [id])
+
+  @@index([tenantId, journalEntryId])
+  @@index([tenantId, accountId])
+}
+
 model Customer {
   id               String            @id @default(uuid())
   tenantId         String
@@ -711,6 +774,20 @@ model CustomerPayment {
   @@unique([tenantId, paymentNumber])
   @@index([tenantId, customerId])
   @@index([tenantId, salesInvoiceId])
+}
+
+enum GlAccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+enum JournalEntryStatus {
+  DRAFT
+  POSTED
+  VOID
 }
 
 enum TenantStatus {

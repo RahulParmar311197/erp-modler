@@ -28,6 +28,7 @@ import { customerRoutes, salesOrderRoutes } from "./modules/sales/routes";
 import { shipmentRoutes } from "./modules/sales/shipment-routes";
 import { salesInvoiceRoutes } from "./modules/sales/invoice-routes";
 import { accountsPayableRoutes } from "./modules/accounts-payable/routes";
+import { accountingRoutes } from "./modules/accounting/routes";
 
 export async function buildApp() {
   const authSecret = process.env.AUTH_SECRET;
@@ -336,6 +337,7 @@ export async function buildApp() {
     await salesInvoiceRoutes(instance, prisma);
     await goodsReceiptRoutes(instance);
     await accountsPayableRoutes(instance);
+    await accountingRoutes(instance, prisma);
   });
 
   return app;
