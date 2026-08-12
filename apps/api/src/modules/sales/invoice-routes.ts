@@ -11,6 +11,7 @@ import {
 } from "../../auth/authorization";
 
 import { writeAuditEvent } from "../../audit/audit";
+import { postJournalEntry } from "../accounting/journal-service";
 import { PrismaClient } from "../../../../../packages/database/generated/prisma/client";
 
 export async function salesInvoiceRoutes(app: FastifyInstance, prisma: PrismaClient) {
@@ -354,25 +355,57 @@ export async function salesInvoiceRoutes(app: FastifyInstance, prisma: PrismaCli
         });
       }
 
-      const updated = await prisma.salesInvoice.update({
-        where: {
-          id: invoice.id,
-        },
-        data: {
-          status: "POSTED",
-        },
-        include: {
-          customer: true,
-          organization: true,
-          salesOrder: true,
-          lines: {
-            include: {
-              item: true,
-              salesOrderLine: true,
-            },
+      const updated = await prisma.$transaction(async (tx) => {
+        const postedInvoice = await tx.salesInvoice.update({
+          where: {
+            id: invoice.id,
           },
-          payments: true,
-        },
+          data: {
+            status: "POSTED",
+          },
+        });
+
+        await postJournalEntry(tx, {
+          tenantId: claims.tenantId,
+          organizationId: invoice.organizationId,
+          entryNumber: `AR-${invoice.invoiceNumber}`,
+          entryDate: invoice.invoiceDate,
+          description: `Sales invoice ${invoice.invoiceNumber}`,
+          sourceType: "SalesInvoice",
+          sourceId: invoice.id,
+          lines: [
+            {
+              accountCode: "1100",
+              description: "Accounts receivable",
+              debit: Number(invoice.totalAmount),
+              credit: 0,
+            },
+            {
+              accountCode: "4000",
+              description: "Sales revenue",
+              debit: 0,
+              credit: Number(invoice.totalAmount),
+            },
+          ],
+        });
+
+        return tx.salesInvoice.findUniqueOrThrow({
+          where: {
+            id: postedInvoice.id,
+          },
+          include: {
+            customer: true,
+            organization: true,
+            salesOrder: true,
+            lines: {
+              include: {
+                item: true,
+                salesOrderLine: true,
+              },
+            },
+            payments: true,
+          },
+        });
       });
 
       await writeAuditEvent(prisma, {

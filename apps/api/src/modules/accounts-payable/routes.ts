@@ -11,6 +11,7 @@ import {
 } from "../../auth/authorization";
 
 import { writeAuditEvent } from "../../audit/audit";
+import { postJournalEntry } from "../accounting/journal-service";
 import { prisma } from "../../lib/prisma";
 
 export async function accountsPayableRoutes(app: FastifyInstance) {
@@ -568,33 +569,89 @@ export async function accountsPayableRoutes(app: FastifyInstance) {
           errors: [
             {
               code: "VALIDATION_ERROR",
-              message:
-                "Only draft vendor bills can be posted",
+              message: "Only draft vendor bills can be posted",
             },
           ],
         });
       }
 
-      const updated = await prisma.vendorBill.update({
+      const accounts = await prisma.glAccount.findMany({
         where: {
-          id: bill.id,
-        },
-        data: {
-          status: "POSTED",
-        },
-        include: {
-          organization: true,
-          supplier: true,
-          purchaseOrder: true,
-          lines: {
-            include: {
-              item: true,
-              purchaseOrderLine: true,
-              goodsReceiptLine: true,
-            },
+          tenantId: claims.tenantId,
+          code: {
+            in: ["2000", "5000"],
           },
-          payments: true,
+          active: true,
         },
+      });
+
+      const accountsByCode = new Map(
+        accounts.map((account) => [account.code, account]),
+      );
+
+      const accountsPayable = accountsByCode.get("2000");
+      const costOfGoodsSold = accountsByCode.get("5000");
+
+      if (!accountsPayable || !costOfGoodsSold) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message:
+                "Required GL accounts 2000 and 5000 are missing or inactive",
+            },
+          ],
+        });
+      }
+
+      const updated = await prisma.$transaction(async (tx) => {
+        const posted = await tx.vendorBill.update({
+          where: {
+            id: bill.id,
+          },
+          data: {
+            status: "POSTED",
+          },
+          include: {
+            organization: true,
+            supplier: true,
+            purchaseOrder: true,
+            lines: {
+              include: {
+                item: true,
+                purchaseOrderLine: true,
+                goodsReceiptLine: true,
+              },
+            },
+            payments: true,
+          },
+        });
+
+        await postJournalEntry(tx, {
+          tenantId: claims.tenantId,
+          organizationId: bill.organizationId,
+          entryNumber: `AP-${bill.billNumber}`,
+          entryDate: bill.billDate,
+          description: `Vendor bill ${bill.billNumber}`,
+          sourceType: "VendorBill",
+          sourceId: bill.id,
+          lines: [
+            {
+              accountCode: "5000",
+              description: `Cost of goods - ${bill.billNumber}`,
+              debit: Number(bill.totalAmount),
+              credit: 0,
+            },
+            {
+              accountCode: "2000",
+              description: `Accounts payable - ${bill.billNumber}`,
+              debit: 0,
+              credit: Number(bill.totalAmount),
+            },
+          ],
+        });
+
+        return posted;
       });
 
       await writeAuditEvent(prisma, {
@@ -614,7 +671,6 @@ export async function accountsPayableRoutes(app: FastifyInstance) {
     },
   );
 
-  // =========================================================
   // LIST VENDOR PAYMENTS
   // =========================================================
 
