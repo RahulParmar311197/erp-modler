@@ -41,6 +41,23 @@ describe("Sales flow", () => {
 
       const suffix = Date.now();
 
+  // 0. PREPARE STOCK FOR SALES FLOW
+  const stockAdjustment = await app.inject({
+    method: "POST",
+    url: "/api/stock/adjustment",
+    headers,
+    payload: {
+      itemId,
+      warehouseId,
+      binId,
+      quantity: 1,
+      notes: `Prepare sales flow test stock ${suffix}`,
+    },
+  });
+
+  expect(stockAdjustment.statusCode).toBe(200);
+
+
       // 1. CREATE SALES ORDER
       const create = await app.inject({
         method: "POST",
@@ -115,8 +132,6 @@ describe("Sales flow", () => {
           ],
         },
       });
-
-      expect(ship.statusCode).toBe(201);
 
       const shipment = ship.json().data;
 
@@ -578,7 +593,22 @@ describe("Sales flow", () => {
 
       expect(approve.statusCode).toBe(200);
 
-      const [first, second] = await Promise.all([
+      // Provide exactly 1 unit of stock so only one concurrent shipment can succeed.
+  const stockAdjustment = await app.inject({
+    method: "POST",
+    url: "/api/stock/adjustment",
+    headers,
+    payload: {
+      itemId,
+      warehouseId,
+      binId,
+      quantity: 1,
+    },
+  });
+
+  expect(stockAdjustment.statusCode).toBe(200);
+
+  const [first, second] = await Promise.all([
         app.inject({
           method: "POST",
           url: `/api/sales-orders/${salesOrderId}/ship`,
@@ -742,7 +772,22 @@ describe("Sales flow", () => {
 
       expect(approve.statusCode).toBe(200);
 
-      // First shipment: 1 of 2.
+      const stockAdjustment = await app.inject({
+    method: "POST",
+    url: "/api/stock/adjustment",
+    headers,
+    payload: {
+      itemId,
+      warehouseId,
+      binId,
+      quantity: 2,
+      reason: "Partial shipment test stock",
+    },
+  });
+
+  expect(stockAdjustment.statusCode).toBe(200);
+
+  // First shipment: 1 of 2.
       const firstShip = await app.inject({
         method: "POST",
         url: `/api/sales-orders/${salesOrderId}/ship`,

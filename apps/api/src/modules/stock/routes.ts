@@ -49,11 +49,6 @@ export async function stockRoutes(
           orderBy: {
             createdAt: "asc",
           },
-          include: {
-            item: true,
-            warehouse: true,
-            bin: true,
-          },
         });
 
       return {
@@ -219,11 +214,6 @@ export async function stockRoutes(
                 binId: body.binId,
                 quantity: body.quantity!,
               },
-              include: {
-                item: true,
-                warehouse: true,
-                bin: true,
-              },
             });
 
           const movement =
@@ -321,45 +311,75 @@ export async function stockRoutes(
         });
       }
 
-      const balance =
-        await prisma.stockBalance.findFirst({
-          where: {
-            tenantId: claims.tenantId,
-            itemId: body.itemId,
-            warehouseId: body.warehouseId,
-            binId: body.binId ?? null,
-          },
-        });
-
-      if (!balance) {
-        return reply.code(404).send({
-          errors: [
-            {
-              code: "NOT_FOUND",
-              message:
-                "Stock balance does not exist",
-            },
-          ],
-        });
-      }
-
-      const newQuantity =
-        Number(balance.quantity) + body.quantity;
-
-      if (newQuantity < 0) {
-        return reply.code(400).send({
-          errors: [
-            {
-              code: "VALIDATION_ERROR",
-              message:
-                "Stock quantity cannot become negative",
-            },
-          ],
-        });
-      }
-
       const result =
         await prisma.$transaction(async (tx) => {
+          /*
+           * Lock the exact stock balance row before reading quantity.
+           *
+           * The previous implementation read quantity outside the
+           * transaction, which allowed concurrent adjustments to overwrite
+           * each other.
+           *
+           * The explicit ::text cast is required for PostgreSQL when
+           * binId is nullable and the parameter can be NULL.
+           */
+          const rows = await tx.$queryRaw<
+            Array<{
+              id: string;
+            }>
+          >`
+            SELECT "id"
+            FROM "StockBalance"
+            WHERE "tenantId" = ${claims.tenantId}::text
+              AND "itemId" = ${body.itemId}::text
+              AND "warehouseId" = ${body.warehouseId}::text
+              AND (
+                "binId" = ${body.binId ?? null}::text
+                OR (
+                  "binId" IS NULL
+                  AND ${body.binId ?? null}::text IS NULL
+                )
+              )
+            FOR UPDATE
+          `;
+
+          const lockedRow = rows[0];
+
+          if (!lockedRow) {
+            return {
+              missing: true as const,
+            };
+          }
+
+          /*
+           * Now that the row is locked, read the current quantity.
+           * This read occurs inside the same transaction.
+           */
+          const balance =
+            await tx.stockBalance.findUnique({
+              where: {
+                id: lockedRow.id,
+              },
+            });
+
+          if (!balance) {
+            return {
+              missing: true as const,
+            };
+          }
+
+          const currentQuantity =
+            Number(balance.quantity);
+
+          const newQuantity =
+            currentQuantity + body.quantity!;
+
+          if (newQuantity < 0) {
+            return {
+              insufficient: true as const,
+            };
+          }
+
           const updated =
             await tx.stockBalance.update({
               where: {
@@ -367,13 +387,7 @@ export async function stockRoutes(
               },
               data: {
                 quantity: newQuantity,
-              },
-              include: {
-                item: true,
-                warehouse: true,
-                bin: true,
-              },
-            });
+              },});
 
           const movement =
             await tx.stockMovement.create({
@@ -393,16 +407,41 @@ export async function stockRoutes(
           return {
             balance: updated,
             movement,
+            previousBalance: balance,
           };
         });
+
+      if ("missing" in result && result.missing) {
+        return reply.code(404).send({
+          errors: [
+            {
+              code: "NOT_FOUND",
+              message:
+                "Stock balance does not exist",
+            },
+          ],
+        });
+      }
+
+      if ("insufficient" in result && result.insufficient) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message:
+                "Stock quantity cannot become negative",
+            },
+          ],
+        });
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,
         actorUserId: claims.sub,
         action: "UPDATE",
         entityType: "StockBalance",
-        entityId: balance.id,
-        previousState: balance,
+        entityId: result.balance.id,
+        previousState: result.previousBalance,
         newState: result.balance,
       });
 
@@ -650,110 +689,153 @@ export async function stockRoutes(
         }
       }
 
+      const result =
+        await prisma.$transaction(async (tx) => {
+      /*
+       * Lock both source and destination balances in deterministic order.
+       *
+       * Opposing transfers (A -> B and B -> A) must acquire the same
+       * row locks in the same order. This prevents PostgreSQL 40P01
+       * deadlocks caused by locking source first and destination second.
+       */
+      const stockRows = await tx.$queryRaw<
+        Array<{
+          id: string;
+          warehouseId: string;
+          binId: string | null;
+        }>
+      >`
+        SELECT
+          "id",
+          "warehouseId",
+          "binId"
+        FROM "StockBalance"
+        WHERE "tenantId" = ${claims.tenantId}::text
+          AND "itemId" = ${body.itemId}::text
+          AND (
+            (
+              "warehouseId" = ${body.sourceWarehouseId}::text
+              AND (
+                "binId" = ${body.sourceBinId ?? null}::text
+                OR (
+                  "binId" IS NULL
+                  AND ${body.sourceBinId ?? null}::text IS NULL
+                )
+              )
+            )
+            OR
+            (
+              "warehouseId" = ${body.destinationWarehouseId}::text
+              AND (
+                "binId" = ${body.destinationBinId ?? null}::text
+                OR (
+                  "binId" IS NULL
+                  AND ${body.destinationBinId ?? null}::text IS NULL
+                )
+              )
+            )
+          )
+        ORDER BY "id"
+        FOR UPDATE
+      `;
+
+      const sourceRow = stockRows.find(
+        (row) =>
+          row.warehouseId === body.sourceWarehouseId &&
+          row.binId === (body.sourceBinId ?? null),
+      );
+
+      const destinationRow = stockRows.find(
+        (row) =>
+          row.warehouseId === body.destinationWarehouseId &&
+          row.binId === (body.destinationBinId ?? null),
+      );
+
+      if (!sourceRow) {
+        return {
+          missingSource: true as const,
+        };
+      }
+
       const sourceBalance =
-        await prisma.stockBalance.findFirst({
+        await tx.stockBalance.findUnique({
           where: {
-            tenantId: claims.tenantId,
-            itemId: body.itemId,
-            warehouseId: body.sourceWarehouseId,
-            binId: body.sourceBinId ?? null,
+            id: sourceRow.id,
           },
         });
 
       if (!sourceBalance) {
-        return reply.code(404).send({
-          errors: [
-            {
-              code: "NOT_FOUND",
-              message:
-                "Source stock balance does not exist",
-            },
-          ],
-        });
+        return {
+          missingSource: true as const,
+        };
       }
 
       const sourceQuantity =
         Number(sourceBalance.quantity);
 
-      if (sourceQuantity < body.quantity) {
-        return reply.code(400).send({
-          errors: [
-            {
-              code: "VALIDATION_ERROR",
-              message:
-                `Insufficient stock. Available: ${sourceQuantity}`,
-            },
-          ],
-        });
+      /*
+       * The quantity check happens after the source row is locked.
+       */
+      if (sourceQuantity < body.quantity!) {
+        return {
+          insufficient: true as const,
+          available: sourceQuantity,
+          sourceBalance,
+        };
       }
 
-      const result =
-        await prisma.$transaction(async (tx) => {
-          const updatedSource =
-            await tx.stockBalance.update({
-              where: {
-                id: sourceBalance.id,
-              },
-              data: {
-                quantity:
-                  sourceQuantity - body.quantity!,
-              },
-              include: {
-                item: true,
-                warehouse: true,
-                bin: true,
-              },
-            });
+      const updatedSource =
+        await tx.stockBalance.update({
+          where: {
+            id: sourceBalance.id,
+          },
+          data: {
+            quantity:
+              sourceQuantity - body.quantity!,
+          },
+        });
 
-          const destinationBalance =
-            await tx.stockBalance.findFirst({
-              where: {
-                tenantId: claims.tenantId,
-                itemId: body.itemId,
-                warehouseId:
-                  body.destinationWarehouseId,
-                binId:
-                  body.destinationBinId ?? null,
-              },
-            });
+      let updatedDestination;
 
-          let updatedDestination;
+      if (destinationRow) {
+        const destinationBalance =
+          await tx.stockBalance.findUnique({
+            where: {
+              id: destinationRow.id,
+            },
+          });
 
-          if (destinationBalance) {
-            updatedDestination =
-              await tx.stockBalance.update({
-                where: {
-                  id: destinationBalance.id,
-                },
-                data: {
-                  quantity:
-                    Number(destinationBalance.quantity) +
-                    body.quantity!,
-                },
-                include: {
-                  item: true,
-                  warehouse: true,
-                  bin: true,
-                },
-              });
-          } else {
-            updatedDestination =
-              await tx.stockBalance.create({
-                data: {
-                  tenantId: claims.tenantId,
-                  itemId: body.itemId!,
-                  warehouseId:
-                    body.destinationWarehouseId!,
-                  binId: body.destinationBinId,
-                  quantity: body.quantity!,
-                },
-                include: {
-                  item: true,
-                  warehouse: true,
-                  bin: true,
-                },
-              });
-          }
+        if (!destinationBalance) {
+          throw new Error(
+            "Destination stock balance disappeared while locked",
+          );
+        }
+
+        updatedDestination =
+          await tx.stockBalance.update({
+            where: {
+              id: destinationBalance.id,
+            },
+            data: {
+              quantity:
+                Number(destinationBalance.quantity) +
+                body.quantity!,
+            },
+          });
+      } else {
+        updatedDestination =
+          await tx.stockBalance.create({
+            data: {
+              tenantId: claims.tenantId,
+              itemId: body.itemId!,
+              warehouseId:
+                body.destinationWarehouseId!,
+              binId: body.destinationBinId,
+              quantity: body.quantity!,
+            },
+          });
+      }
+
 
           const sourceMovement =
             await tx.stockMovement.create({
@@ -796,8 +878,33 @@ export async function stockRoutes(
               sourceMovement,
               destinationMovement,
             ],
+            previousSource: sourceBalance,
           };
         });
+
+      if ("missingSource" in result && result.missingSource) {
+        return reply.code(404).send({
+          errors: [
+            {
+              code: "NOT_FOUND",
+              message:
+                "Source stock balance does not exist",
+            },
+          ],
+        });
+      }
+
+      if ("insufficient" in result && result.insufficient) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message:
+                `Insufficient stock. Available: ${result.available}`,
+            },
+          ],
+        });
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,
@@ -805,7 +912,7 @@ export async function stockRoutes(
         action: "TRANSFER",
         entityType: "StockBalance",
         entityId: result.source.id,
-        previousState: sourceBalance,
+        previousState: result.previousSource,
         newState: result,
       });
 
