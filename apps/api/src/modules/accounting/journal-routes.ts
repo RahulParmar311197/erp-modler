@@ -582,6 +582,127 @@ export async function journalRoutes(
   );
 
 
+
+  app.post(
+    "/api/gl/journal-entries/:id/reverse",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "user.create"),
+      ],
+    },
+    async (request, reply) => {
+      const claims = request.user as AuthClaims;
+      const { id } = request.params as { id: string };
+
+      const original = await prisma.journalEntry.findFirst({
+        where: {
+          id,
+          tenantId: claims.tenantId,
+        },
+        include: {
+          organization: true,
+          lines: {
+            include: {
+              account: true,
+            },
+          },
+        },
+      });
+
+      if (!original) {
+        return reply.code(404).send({
+          errors: [
+            {
+              code: "NOT_FOUND",
+              message: "Journal entry not found",
+            },
+          ],
+        });
+      }
+
+      if (original.status !== "POSTED") {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "Only POSTED journal entries can be reversed",
+            },
+          ],
+        });
+      }
+
+      const existingReversal = await prisma.journalEntry.findFirst({
+        where: {
+          tenantId: claims.tenantId,
+          sourceType: "JournalEntryReversal",
+          sourceId: original.id,
+        },
+      });
+
+      if (existingReversal) {
+        return reply.code(409).send({
+          errors: [
+            {
+              code: "CONFLICT",
+              message: "Journal entry has already been reversed",
+            },
+          ],
+        });
+      }
+
+      const reversalNumber = `${original.entryNumber}-REV-${Date.now()}`;
+
+      const reversal = await prisma.journalEntry.create({
+        data: {
+          tenantId: claims.tenantId,
+          organizationId: original.organizationId,
+          entryNumber: reversalNumber,
+          entryDate: new Date(),
+          description: `Reversal of ${original.entryNumber}`,
+          sourceType: "JournalEntryReversal",
+          sourceId: original.id,
+          status: "POSTED",
+          lines: {
+            create: original.lines.map((line) => ({
+              tenantId: claims.tenantId,
+              accountId: line.accountId,
+              debit: line.credit,
+              credit: line.debit,
+              description:
+                line.description
+                  ? `Reversal: ${line.description}`
+                  : `Reversal of ${original.entryNumber}`,
+            })),
+          },
+        },
+        include: {
+          organization: true,
+          lines: {
+            include: {
+              account: true,
+            },
+          },
+        },
+      });
+
+      await writeAuditEvent(prisma, {
+        tenantId: claims.tenantId,
+        actorUserId: claims.sub,
+        action: "CREATE",
+        entityType: "JournalEntry",
+        entityId: reversal.id,
+        previousState: null,
+        newState: reversal,
+      });
+
+      return reply.code(201).send({
+        data: reversal,
+      });
+    },
+  );
+
   app.post(
     "/api/gl/journal-entries/:id/void",
     {
