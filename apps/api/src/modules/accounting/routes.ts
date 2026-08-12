@@ -13,6 +13,29 @@ import {
 import { writeAuditEvent } from "../../audit/audit";
 import { PrismaClient } from "../../../../../packages/database/generated/prisma/client";
 
+function parseReportDate(
+  value: unknown,
+): Date | null | undefined {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(value)
+  ) {
+    return undefined;
+  }
+
+  const date = new Date(`${value}T00:00:00.000Z`);
+
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+
+  return date;
+}
+
 export async function accountingRoutes(
   app: FastifyInstance,
   prisma: PrismaClient,
@@ -183,8 +206,49 @@ export async function accountingRoutes(
           requirePermission(request, reply, "user.view"),
       ],
     },
-    async (request) => {
+    async (request, reply) => {
       const claims = request.user as AuthClaims;
+
+      const query = request.query as {
+        fromDate?: unknown;
+        toDate?: unknown;
+      };
+
+      const fromDate = parseReportDate(query.fromDate);
+      const toDate = parseReportDate(query.toDate);
+
+      if (fromDate === undefined) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "fromDate must be a valid date in YYYY-MM-DD format",
+            },
+          ],
+        });
+      }
+
+      if (toDate === undefined) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "toDate must be a valid date in YYYY-MM-DD format",
+            },
+          ],
+        });
+      }
+
+      if (fromDate && toDate && fromDate > toDate) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "fromDate cannot be after toDate",
+            },
+          ],
+        });
+      }
 
       const accounts = await prisma.glAccount.findMany({
         where: {
@@ -201,6 +265,22 @@ export async function accountingRoutes(
           tenantId: claims.tenantId,
           journalEntry: {
             status: "POSTED",
+            ...(fromDate || toDate
+              ? {
+                  entryDate: {
+                    ...(fromDate ? { gte: fromDate } : {}),
+                    ...(toDate
+                      ? {
+                          lte: new Date(
+                            toDate.getTime() +
+                              24 * 60 * 60 * 1000 -
+                              1,
+                          ),
+                        }
+                      : {}),
+                  },
+                }
+              : {}),
           },
         },
         select: {
@@ -276,8 +356,49 @@ export async function accountingRoutes(
           requirePermission(request, reply, "user.view"),
       ],
     },
-    async (request) => {
+    async (request, reply) => {
       const claims = request.user as AuthClaims;
+
+      const query = request.query as {
+        fromDate?: unknown;
+        toDate?: unknown;
+      };
+
+      const fromDate = parseReportDate(query.fromDate);
+      const toDate = parseReportDate(query.toDate);
+
+      if (fromDate === undefined) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "fromDate must be a valid date in YYYY-MM-DD format",
+            },
+          ],
+        });
+      }
+
+      if (toDate === undefined) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "toDate must be a valid date in YYYY-MM-DD format",
+            },
+          ],
+        });
+      }
+
+      if (fromDate && toDate && fromDate > toDate) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "fromDate cannot be after toDate",
+            },
+          ],
+        });
+      }
 
       const accounts = await prisma.glAccount.findMany({
         where: {
@@ -297,6 +418,22 @@ export async function accountingRoutes(
           tenantId: claims.tenantId,
           journalEntry: {
             status: "POSTED",
+            ...(fromDate || toDate
+              ? {
+                  entryDate: {
+                    ...(fromDate ? { gte: fromDate } : {}),
+                    ...(toDate
+                      ? {
+                          lte: new Date(
+                            toDate.getTime() +
+                              24 * 60 * 60 * 1000 -
+                              1,
+                          ),
+                        }
+                      : {}),
+                  },
+                }
+              : {}),
           },
         },
         select: {
@@ -390,8 +527,25 @@ export async function accountingRoutes(
           requirePermission(request, reply, "user.view"),
       ],
     },
-    async (request) => {
+    async (request, reply) => {
       const claims = request.user as AuthClaims;
+
+      const query = request.query as {
+        toDate?: string;
+      };
+
+      const toDate = parseReportDate(query.toDate);
+
+      if (toDate === undefined) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "toDate must be a valid date in YYYY-MM-DD format",
+            },
+          ],
+        });
+      }
 
       const accounts = await prisma.glAccount.findMany({
         where: {
@@ -411,6 +565,17 @@ export async function accountingRoutes(
           tenantId: claims.tenantId,
           journalEntry: {
             status: "POSTED",
+            ...(toDate
+              ? {
+                  entryDate: {
+                    lte: new Date(
+                      toDate.getTime() +
+                        24 * 60 * 60 * 1000 -
+                        1,
+                    ),
+                  },
+                }
+              : {}),
           },
         },
         select: {
