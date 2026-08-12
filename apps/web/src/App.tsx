@@ -3,6 +3,18 @@ import "./App.css";
 
 const API = "";
 
+type Supplier = {
+  id: string;
+  code: string;
+  name: string;
+};
+
+type Item = {
+  id: string;
+  sku: string;
+  name: string;
+};
+
 type Bill = {
   id: string;
   billNumber: string;
@@ -13,10 +25,7 @@ type Bill = {
   taxAmount: string;
   totalAmount: string;
   paidAmount: string;
-  supplier: {
-    name: string;
-    code: string;
-  };
+  supplier: Supplier;
 };
 
 type LoginResponse = {
@@ -26,17 +35,30 @@ type LoginResponse = {
 };
 
 function App() {
-  const [, setToken] = useState("");
+  const [token, setToken] = useState("");
   const [bills, setBills] = useState<Bill[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
+  const [paymentBill, setPaymentBill] = useState<Bill | null>(null);
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentNumber, setPaymentNumber] = useState("");
+
+
+  const [billNumber, setBillNumber] = useState("");
+  const [supplierId, setSupplierId] = useState("");
+  const [quantity, setQuantity] = useState("1");
+  const [unitPrice, setUnitPrice] = useState("0");
+  const [taxAmount, setTaxAmount] = useState("0");
+  const [itemId, setItemId] = useState("");
 
   async function login() {
     const response = await fetch(`${API}/api/auth/login`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         tenantCode: "MODLER",
         email: "admin@modler.local",
@@ -53,26 +75,50 @@ function App() {
     return result.data.token;
   }
 
-  async function loadBills(authToken: string) {
-    const response = await fetch(`${API}/api/vendor-bills`, {
-      headers: {
-        Authorization: `Bearer ${authToken}`,
-      },
-    });
+  async function loadData(authToken: string) {
+    const headers = {
+      Authorization: `Bearer ${authToken}`,
+    };
 
-    if (!response.ok) {
-      throw new Error("Unable to load vendor bills");
+    const [billResponse, supplierResponse, itemResponse] =
+      await Promise.all([
+        fetch(`${API}/api/vendor-bills`, { headers }),
+        fetch(`${API}/api/suppliers`, { headers }),
+        fetch(`${API}/api/items`, { headers }),
+      ]);
+
+    if (!billResponse.ok) throw new Error("Unable to load vendor bills");
+    if (!supplierResponse.ok) throw new Error("Unable to load suppliers");
+    if (!itemResponse.ok) throw new Error("Unable to load items");
+
+    const billsResult = await billResponse.json();
+    const suppliersResult = await supplierResponse.json();
+    const itemsResult = await itemResponse.json();
+
+    setBills(billsResult.data ?? []);
+    setSuppliers(suppliersResult.data ?? []);
+    setItems(itemsResult.data ?? []);
+
+    if (!supplierId && suppliersResult.data?.length) {
+      setSupplierId(suppliersResult.data[0].id);
     }
 
-    const result = await response.json();
-    setBills(result.data ?? []);
+    if (!itemId && itemsResult.data?.length) {
+      setItemId(itemsResult.data[0].id);
+    }
+  }
+
+  async function refresh() {
+    if (token) {
+      await loadData(token);
+    }
   }
 
   useEffect(() => {
     async function initialize() {
       try {
         const authToken = await login();
-        await loadBills(authToken);
+        await loadData(authToken);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unexpected error");
       } finally {
@@ -83,36 +129,174 @@ function App() {
     void initialize();
   }, []);
 
-  const totals = useMemo(() => {
-    return bills.reduce(
-      (result, bill) => {
-        const total = Number(bill.totalAmount);
-        const paid = Number(bill.paidAmount);
+  async function createBill(event: React.FormEvent) {
+    event.preventDefault();
 
-        result.total += total;
-        result.paid += paid;
-        result.outstanding += total - paid;
+    if (!supplierId || !itemId || !billNumber.trim()) {
+      setError("Bill number, supplier and item are required.");
+      return;
+    }
 
-        return result;
+    const quantityNumber = Number(quantity);
+    const unitPriceNumber = Number(unitPrice);
+    const taxNumber = Number(taxAmount);
+    const subtotal = quantityNumber * unitPriceNumber;
+    const total = subtotal + taxNumber;
+
+    if (quantityNumber <= 0 || unitPriceNumber < 0 || taxNumber < 0) {
+      setError("Enter valid amounts.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API}/api/vendor-bills`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          organizationId: "0acbfc53-94fe-457c-8e43-b048dc454a3d",
+          supplierId,
+          billNumber: billNumber.trim(),
+          currency: "INR",
+          subtotal,
+          taxAmount: taxNumber,
+          totalAmount: total,
+          lines: [
+            {
+              itemId,
+              description:
+                items.find((item) => item.id === itemId)?.name ?? "Item",
+              quantity: quantityNumber,
+              unitPrice: unitPriceNumber,
+              lineTotal: subtotal,
+            },
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        const result = await response.json().catch(() => null);
+        throw new Error(
+          result?.errors?.[0]?.message ?? "Unable to create vendor bill",
+        );
+      }
+
+      setBillNumber("");
+      setQuantity("1");
+      setUnitPrice("0");
+      setTaxAmount("0");
+      setShowCreate(false);
+
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to create bill");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function postBill(id: string) {
+    setError("");
+
+    const response = await fetch(`${API}/api/vendor-bills/${id}/post`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
       },
-      {
-        total: 0,
-        paid: 0,
-        outstanding: 0,
-      },
-    );
-  }, [bills]);
+    });
+
+    if (!response.ok) {
+      const result = await response.json().catch(() => null);
+      setError(result?.errors?.[0]?.message ?? "Unable to post bill");
+      return;
+    }
+
+    await refresh();
+  }
+
+  async function recordPayment(event: React.FormEvent) {
+    event.preventDefault();
+
+    if (!paymentBill || !paymentNumber.trim()) {
+      setError("Payment number is required.");
+      return;
+    }
+
+    const amount = Number(paymentAmount);
+    const outstanding =
+      Number(paymentBill.totalAmount) - Number(paymentBill.paidAmount);
+
+    if (amount <= 0 || amount > outstanding) {
+      setError(`Payment must be greater than 0 and no more than ₹${outstanding.toLocaleString("en-IN")}.`);
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API}/api/vendor-payments`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          supplierId: paymentBill.supplier.id,
+          vendorBillId: paymentBill.id,
+          paymentNumber: paymentNumber.trim(),
+          amount,
+          currency: paymentBill.currency,
+          notes: "Recorded from Accounts Payable dashboard",
+        }),
+      });
+
+      if (!response.ok) {
+        const result = await response.json().catch(() => null);
+        throw new Error(
+          result?.errors?.[0]?.message ?? "Unable to record payment",
+        );
+      }
+
+      setPaymentBill(null);
+      setPaymentAmount("");
+      setPaymentNumber("");
+
+      await refresh();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Unable to record payment",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const totals = useMemo(
+    () =>
+      bills.reduce(
+        (result, bill) => {
+          const total = Number(bill.totalAmount);
+          const paid = Number(bill.paidAmount);
+
+          result.total += total;
+          result.paid += paid;
+          result.outstanding += total - paid;
+
+          return result;
+        },
+        { total: 0, paid: 0, outstanding: 0 },
+      ),
+    [bills],
+  );
 
   if (loading) {
     return <main className="app">Loading ERP MODLER...</main>;
-  }
-
-  if (error) {
-    return (
-      <main className="app">
-        <div className="error">{error}</div>
-      </main>
-    );
   }
 
   return (
@@ -123,11 +307,16 @@ function App() {
           <h1>Accounts Payable</h1>
         </div>
 
-        <div className="connection">
-          <span className="dot" />
-          API Connected
+        <div className="top-actions">
+          <span className="connection">
+            <span className="dot" />
+            API Connected
+          </span>
+          <span className="user">System Administrator</span>
         </div>
       </header>
+
+      {error && <div className="error-banner">{error}</div>}
 
       <section className="cards">
         <div className="card">
@@ -155,9 +344,93 @@ function App() {
         <div className="panel-header">
           <div>
             <h2>Vendor Bills</h2>
-            <p>Live data from the Accounts Payable API</p>
+            <p>Create and manage supplier invoices.</p>
           </div>
+
+          <button
+            className="primary-button"
+            onClick={() => setShowCreate((value) => !value)}
+          >
+            {showCreate ? "Close" : "+ New Vendor Bill"}
+          </button>
         </div>
+
+        {showCreate && (
+          <form className="create-form" onSubmit={createBill}>
+            <div className="form-grid">
+              <label>
+                Bill Number
+                <input
+                  value={billNumber}
+                  onChange={(event) => setBillNumber(event.target.value)}
+                  placeholder="VB-TEST-002"
+                />
+              </label>
+
+              <label>
+                Supplier
+                <select
+                  value={supplierId}
+                  onChange={(event) => setSupplierId(event.target.value)}
+                >
+                  {suppliers.map((supplier) => (
+                    <option key={supplier.id} value={supplier.id}>
+                      {supplier.code} — {supplier.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Item
+                <select
+                  value={itemId}
+                  onChange={(event) => setItemId(event.target.value)}
+                >
+                  {items.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.sku} — {item.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Quantity
+                <input
+                  type="number"
+                  min="1"
+                  value={quantity}
+                  onChange={(event) => setQuantity(event.target.value)}
+                />
+              </label>
+
+              <label>
+                Unit Price
+                <input
+                  type="number"
+                  min="0"
+                  value={unitPrice}
+                  onChange={(event) => setUnitPrice(event.target.value)}
+                />
+              </label>
+
+              <label>
+                Tax Amount
+                <input
+                  type="number"
+                  min="0"
+                  value={taxAmount}
+                  onChange={(event) => setTaxAmount(event.target.value)}
+                />
+              </label>
+            </div>
+
+            <button className="primary-button" disabled={saving}>
+              {saving ? "Creating..." : "Create Draft Bill"}
+            </button>
+          </form>
+        )}
 
         {bills.length === 0 ? (
           <div className="empty">No vendor bills found.</div>
@@ -173,6 +446,7 @@ function App() {
                   <th>Paid</th>
                   <th>Outstanding</th>
                   <th>Status</th>
+                  <th>Action</th>
                 </tr>
               </thead>
 
@@ -196,25 +470,43 @@ function App() {
                         {new Date(bill.billDate).toLocaleDateString("en-IN")}
                       </td>
 
-                      <td>
-                        {bill.currency}{" "}
-                        {total.toLocaleString("en-IN")}
-                      </td>
-
-                      <td>
-                        {bill.currency}{" "}
-                        {paid.toLocaleString("en-IN")}
-                      </td>
-
-                      <td>
-                        {bill.currency}{" "}
-                        {(total - paid).toLocaleString("en-IN")}
-                      </td>
+                      <td>₹{total.toLocaleString("en-IN")}</td>
+                      <td>₹{paid.toLocaleString("en-IN")}</td>
+                      <td>₹{(total - paid).toLocaleString("en-IN")}</td>
 
                       <td>
                         <span className={`status ${bill.status.toLowerCase()}`}>
                           {bill.status.replaceAll("_", " ")}
                         </span>
+                      </td>
+
+                      <td>
+                        {bill.status === "DRAFT" && (
+                          <button
+                            className="action-button"
+                            onClick={() => void postBill(bill.id)}
+                          >
+                            Post
+                          </button>
+                        )}
+
+                        {(bill.status === "POSTED" ||
+                          bill.status === "PARTIALLY_PAID") && (
+                          <button
+                            className="action-button"
+                            onClick={() => {
+                              setPaymentBill(bill);
+                              setPaymentAmount("");
+                              setPaymentNumber("");
+                            }}
+                          >
+                            Record Payment
+                          </button>
+                        )}
+
+                        {bill.status === "PAID" && (
+                          <span className="paid-label">Paid</span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -224,6 +516,87 @@ function App() {
           </div>
         )}
       </section>
+
+      {paymentBill && (
+        <div className="modal-backdrop">
+          <form className="modal" onSubmit={recordPayment}>
+            <div className="modal-header">
+              <div>
+                <div className="eyebrow">ACCOUNTS PAYABLE</div>
+                <h2>Record Payment</h2>
+              </div>
+
+              <button
+                type="button"
+                className="close-button"
+                onClick={() => setPaymentBill(null)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="payment-summary">
+              <div>
+                <span>Bill</span>
+                <strong>{paymentBill.billNumber}</strong>
+              </div>
+
+              <div>
+                <span>Supplier</span>
+                <strong>{paymentBill.supplier.name}</strong>
+              </div>
+
+              <div>
+                <span>Outstanding</span>
+                <strong>
+                  ₹
+                  {(
+                    Number(paymentBill.totalAmount) -
+                    Number(paymentBill.paidAmount)
+                  ).toLocaleString("en-IN")}
+                </strong>
+              </div>
+            </div>
+
+            <div className="form-grid single">
+              <label>
+                Payment Number
+                <input
+                  value={paymentNumber}
+                  onChange={(event) => setPaymentNumber(event.target.value)}
+                  placeholder="VP-TEST-003"
+                  autoFocus
+                />
+              </label>
+
+              <label>
+                Payment Amount
+                <input
+                  type="number"
+                  min="1"
+                  value={paymentAmount}
+                  onChange={(event) => setPaymentAmount(event.target.value)}
+                  placeholder="500"
+                />
+              </label>
+            </div>
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setPaymentBill(null)}
+              >
+                Cancel
+              </button>
+
+              <button className="primary-button" disabled={saving}>
+                {saving ? "Saving..." : "Record Payment"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </main>
   );
 }
