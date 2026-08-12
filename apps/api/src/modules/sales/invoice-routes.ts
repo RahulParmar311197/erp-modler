@@ -434,74 +434,84 @@ export async function salesInvoiceRoutes(app: FastifyInstance, prisma: PrismaCli
         });
       }
 
-      const invoice = await prisma.salesInvoice.findFirst({
-        where: {
-          id,
-          tenantId: claims.tenantId,
-        },
-      });
-
-      if (!invoice) {
-        return reply.code(404).send({
-          errors: [
-            {
-              code: "NOT_FOUND",
-              message: "Sales invoice not found",
-            },
-          ],
-        });
-      }
-
-      if (
-        invoice.status !== "POSTED" &&
-        invoice.status !== "PARTIALLY_PAID"
-      ) {
-        return reply.code(400).send({
-          errors: [
-            {
-              code: "VALIDATION_ERROR",
-              message:
-                "Payments can only be recorded against posted invoices",
-            },
-          ],
-        });
-      }
-
-      const outstanding =
-        Number(invoice.totalAmount) -
-        Number(invoice.paidAmount);
-
-      if (amount > outstanding) {
-        return reply.code(400).send({
-          errors: [
-            {
-              code: "VALIDATION_ERROR",
-              message:
-                `Payment exceeds outstanding amount. Outstanding: ${outstanding}`,
-            },
-          ],
-        });
-      }
-
-      const existing = await prisma.customerPayment.findFirst({
-        where: {
-          tenantId: claims.tenantId,
-          paymentNumber,
-        },
-      });
-
-      if (existing) {
-        return reply.code(409).send({
-          errors: [
-            {
-              code: "CONFLICT",
-              message: "Payment number already exists",
-            },
-          ],
-        });
-      }
-
       const result = await prisma.$transaction(async (tx) => {
+        /*
+         * Lock the invoice row before reading paidAmount.
+         *
+         * Without this lock, two concurrent payments can both observe
+         * the same paidAmount and each approve an amount that exceeds
+         * the invoice's actual outstanding balance.
+         */
+        const rows = await tx.$queryRaw<
+          Array<{
+            id: string;
+          }>
+        >`
+          SELECT "id"
+          FROM "SalesInvoice"
+          WHERE "id" = ${id}::text
+            AND "tenantId" = ${claims.tenantId}::text
+          FOR UPDATE
+        `;
+
+        const lockedRow = rows[0];
+
+        if (!lockedRow) {
+          return {
+            ok: false as const,
+            reason: "MISSING" as const,
+          };
+        }
+
+        const invoice = await tx.salesInvoice.findUnique({
+          where: {
+            id: lockedRow.id,
+          },
+        });
+
+        if (!invoice) {
+          return {
+            ok: false as const,
+            reason: "MISSING" as const,
+          };
+        }
+
+        if (
+          invoice.status !== "POSTED" &&
+          invoice.status !== "PARTIALLY_PAID"
+        ) {
+          return {
+            ok: false as const,
+            reason: "INVALID_STATUS" as const,
+          };
+        }
+
+        const outstanding =
+          Number(invoice.totalAmount) -
+          Number(invoice.paidAmount);
+
+        if (amount > outstanding) {
+          return {
+            ok: false as const,
+            reason: "EXCEEDS_OUTSTANDING" as const,
+            outstanding,
+          };
+        }
+
+        const existing = await tx.customerPayment.findFirst({
+          where: {
+            tenantId: claims.tenantId,
+            paymentNumber,
+          },
+        });
+
+        if (existing) {
+          return {
+            ok: false as const,
+            reason: "DUPLICATE_PAYMENT_NUMBER" as const,
+          };
+        }
+
         const payment = await tx.customerPayment.create({
           data: {
             tenantId: claims.tenantId,
@@ -549,23 +559,81 @@ export async function salesInvoiceRoutes(app: FastifyInstance, prisma: PrismaCli
           });
 
         return {
+          ok: true as const,
           payment,
           invoice: updatedInvoice,
+          previousInvoice: invoice,
         };
       });
+
+      if (!result.ok) {
+        if (result.reason === "MISSING") {
+          return reply.code(404).send({
+            errors: [
+              {
+                code: "NOT_FOUND",
+                message: "Sales invoice not found",
+              },
+            ],
+          });
+        }
+
+        if (result.reason === "INVALID_STATUS") {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message:
+                  "Payments can only be recorded against posted invoices",
+              },
+            ],
+          });
+        }
+
+        if (result.reason === "EXCEEDS_OUTSTANDING") {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message:
+                  `Payment exceeds outstanding amount. Outstanding: ${result.outstanding}`,
+              },
+            ],
+          });
+        }
+
+        if (result.reason === "DUPLICATE_PAYMENT_NUMBER") {
+          return reply.code(409).send({
+            errors: [
+              {
+                code: "CONFLICT",
+                message: "Payment number already exists",
+              },
+            ],
+          });
+        }
+
+        throw new Error("Unexpected payment transaction result");
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,
         actorUserId: claims.sub,
         action: "PAYMENT",
         entityType: "SalesInvoice",
-        entityId: invoice.id,
-        previousState: invoice,
-        newState: result,
+        entityId: result.invoice.id,
+        previousState: result.previousInvoice,
+        newState: {
+          payment: result.payment,
+          invoice: result.invoice,
+        },
       });
 
       return reply.code(201).send({
-        data: result,
+        data: {
+          payment: result.payment,
+          invoice: result.invoice,
+        },
       });
     },
   );
