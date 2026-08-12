@@ -581,6 +581,90 @@ export async function journalRoutes(
     },
   );
 
+
+  app.post(
+    "/api/gl/journal-entries/:id/void",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "user.create"),
+      ],
+    },
+    async (request, reply) => {
+      const claims = request.user as AuthClaims;
+      const { id } = request.params as { id: string };
+
+      const entry = await prisma.journalEntry.findFirst({
+        where: {
+          id,
+          tenantId: claims.tenantId,
+        },
+        include: {
+          organization: true,
+          lines: {
+            include: {
+              account: true,
+            },
+          },
+        },
+      });
+
+      if (!entry) {
+        return reply.code(404).send({
+          errors: [
+            {
+              code: "NOT_FOUND",
+              message: "Journal entry not found",
+            },
+          ],
+        });
+      }
+
+      if (entry.status !== "POSTED") {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "Only POSTED journal entries can be voided",
+            },
+          ],
+        });
+      }
+
+      const updated = await prisma.journalEntry.update({
+        where: {
+          id: entry.id,
+        },
+        data: {
+          status: "VOID",
+        },
+        include: {
+          organization: true,
+          lines: {
+            include: {
+              account: true,
+            },
+          },
+        },
+      });
+
+      await writeAuditEvent(prisma, {
+        tenantId: claims.tenantId,
+        actorUserId: claims.sub,
+        action: "VOID",
+        entityType: "JournalEntry",
+        entityId: updated.id,
+        previousState: entry,
+        newState: updated,
+      });
+
+      return {
+        data: updated,
+      };
+    },
+  );
+
   app.get(
     "/api/gl/accounts/:accountId/ledger",
     {
