@@ -262,4 +262,257 @@ export async function accountingRoutes(
     },
   );
 
+
+  // =========================================================
+  // PROFIT & LOSS
+  // =========================================================
+
+  app.get(
+    "/api/gl/profit-and-loss",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "user.view"),
+      ],
+    },
+    async (request) => {
+      const claims = request.user as AuthClaims;
+
+      const accounts = await prisma.glAccount.findMany({
+        where: {
+          tenantId: claims.tenantId,
+          active: true,
+          type: {
+            in: ["REVENUE", "EXPENSE"],
+          },
+        },
+        orderBy: {
+          code: "asc",
+        },
+      });
+
+      const lines = await prisma.journalLine.findMany({
+        where: {
+          tenantId: claims.tenantId,
+          journalEntry: {
+            status: "POSTED",
+          },
+        },
+        select: {
+          accountId: true,
+          debit: true,
+          credit: true,
+        },
+      });
+
+      const balances = new Map<
+        string,
+        { debit: number; credit: number }
+      >();
+
+      for (const line of lines) {
+        const current = balances.get(line.accountId) ?? {
+          debit: 0,
+          credit: 0,
+        };
+
+        current.debit += Number(line.debit);
+        current.credit += Number(line.credit);
+
+        balances.set(line.accountId, current);
+      }
+
+      const revenue = accounts
+        .filter((account) => account.type === "REVENUE")
+        .map((account) => {
+          const balance = balances.get(account.id) ?? {
+            debit: 0,
+            credit: 0,
+          };
+
+          return {
+            accountId: account.id,
+            code: account.code,
+            name: account.name,
+            amount: balance.credit - balance.debit,
+          };
+        });
+
+      const expenses = accounts
+        .filter((account) => account.type === "EXPENSE")
+        .map((account) => {
+          const balance = balances.get(account.id) ?? {
+            debit: 0,
+            credit: 0,
+          };
+
+          return {
+            accountId: account.id,
+            code: account.code,
+            name: account.name,
+            amount: balance.debit - balance.credit,
+          };
+        });
+
+      const totalRevenue = revenue.reduce(
+        (sum, row) => sum + row.amount,
+        0,
+      );
+
+      const totalExpenses = expenses.reduce(
+        (sum, row) => sum + row.amount,
+        0,
+      );
+
+      return {
+        data: {
+          revenue,
+          expenses,
+          totalRevenue,
+          totalExpenses,
+          netProfit: totalRevenue - totalExpenses,
+        },
+      };
+    },
+  );
+
+  // =========================================================
+  // BALANCE SHEET
+  // =========================================================
+
+  app.get(
+    "/api/gl/balance-sheet",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "user.view"),
+      ],
+    },
+    async (request) => {
+      const claims = request.user as AuthClaims;
+
+      const accounts = await prisma.glAccount.findMany({
+        where: {
+          tenantId: claims.tenantId,
+          active: true,
+          type: {
+            in: ["ASSET", "LIABILITY", "EQUITY"],
+          },
+        },
+        orderBy: {
+          code: "asc",
+        },
+      });
+
+      const lines = await prisma.journalLine.findMany({
+        where: {
+          tenantId: claims.tenantId,
+          journalEntry: {
+            status: "POSTED",
+          },
+        },
+        select: {
+          accountId: true,
+          debit: true,
+          credit: true,
+        },
+      });
+
+      const balances = new Map<
+        string,
+        { debit: number; credit: number }
+      >();
+
+      for (const line of lines) {
+        const current = balances.get(line.accountId) ?? {
+          debit: 0,
+          credit: 0,
+        };
+
+        current.debit += Number(line.debit);
+        current.credit += Number(line.credit);
+
+        balances.set(line.accountId, current);
+      }
+
+      const assets = accounts
+        .filter((account) => account.type === "ASSET")
+        .map((account) => {
+          const balance = balances.get(account.id) ?? {
+            debit: 0,
+            credit: 0,
+          };
+
+          return {
+            accountId: account.id,
+            code: account.code,
+            name: account.name,
+            amount: balance.debit - balance.credit,
+          };
+        });
+
+      const liabilities = accounts
+        .filter((account) => account.type === "LIABILITY")
+        .map((account) => {
+          const balance = balances.get(account.id) ?? {
+            debit: 0,
+            credit: 0,
+          };
+
+          return {
+            accountId: account.id,
+            code: account.code,
+            name: account.name,
+            amount: balance.credit - balance.debit,
+          };
+        });
+
+      const equity = accounts
+        .filter((account) => account.type === "EQUITY")
+        .map((account) => {
+          const balance = balances.get(account.id) ?? {
+            debit: 0,
+            credit: 0,
+          };
+
+          return {
+            accountId: account.id,
+            code: account.code,
+            name: account.name,
+            amount: balance.credit - balance.debit,
+          };
+        });
+
+      const totalAssets = assets.reduce(
+        (sum, row) => sum + row.amount,
+        0,
+      );
+
+      const totalLiabilities = liabilities.reduce(
+        (sum, row) => sum + row.amount,
+        0,
+      );
+
+      const totalEquity = equity.reduce(
+        (sum, row) => sum + row.amount,
+        0,
+      );
+
+      return {
+        data: {
+          assets,
+          liabilities,
+          equity,
+          totalAssets,
+          totalLiabilities,
+          totalEquity,
+          balance:
+            totalAssets - totalLiabilities - totalEquity,
+        },
+      };
+    },
+  );
+
 }
