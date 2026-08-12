@@ -49,22 +49,170 @@ export async function accountingRoutes(
           requirePermission(request, reply, "user.view"),
       ],
     },
-    async (request) => {
+    async (request, reply) => {
       const claims = request.user as AuthClaims;
 
-      const accounts = await prisma.glAccount.findMany({
-        where: {
-          tenantId: claims.tenantId,
-        },
-        orderBy: {
-          code: "asc",
-        },
-        include: {
-          organization: true,
-        },
-      });
+      const query = request.query as {
+        code?: unknown;
+        name?: unknown;
+        type?: unknown;
+        active?: unknown;
+        organizationId?: unknown;
+        page?: unknown;
+        pageSize?: unknown;
+      };
 
-      return { data: accounts };
+      const code =
+        typeof query.code === "string" && query.code.trim()
+          ? query.code.trim()
+          : undefined;
+
+      const name =
+        typeof query.name === "string" && query.name.trim()
+          ? query.name.trim()
+          : undefined;
+
+      const type =
+        typeof query.type === "string" && query.type.trim()
+          ? query.type.trim().toUpperCase()
+          : undefined;
+
+      const organizationId =
+        typeof query.organizationId === "string" &&
+        query.organizationId.trim()
+          ? query.organizationId.trim()
+          : undefined;
+
+      let active: boolean | undefined;
+
+      if (query.active !== undefined && query.active !== "") {
+        if (query.active === "true" || query.active === true) {
+          active = true;
+        } else if (
+          query.active === "false" ||
+          query.active === false
+        ) {
+          active = false;
+        } else {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message: "active must be true or false",
+              },
+            ],
+          });
+        }
+      }
+
+      const validTypes = [
+        "ASSET",
+        "LIABILITY",
+        "EQUITY",
+        "REVENUE",
+        "EXPENSE",
+      ];
+
+      if (type && !validTypes.includes(type)) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "Invalid GL account type",
+            },
+          ],
+        });
+      }
+
+      const parsePositiveInt = (
+        value: unknown,
+        fallback: number,
+      ): number | undefined => {
+        if (value === undefined || value === null || value === "") {
+          return fallback;
+        }
+
+        const parsed = Number(value);
+
+        if (!Number.isInteger(parsed) || parsed < 1) {
+          return undefined;
+        }
+
+        return parsed;
+      };
+
+      const page = parsePositiveInt(query.page, 1);
+      const pageSize = parsePositiveInt(query.pageSize, 25);
+
+      if (page === undefined || pageSize === undefined) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "page and pageSize must be positive integers",
+            },
+          ],
+        });
+      }
+
+      if (pageSize > 100) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "pageSize cannot exceed 100",
+            },
+          ],
+        });
+      }
+
+      const where = {
+        tenantId: claims.tenantId,
+        ...(code ? { code } : {}),
+        ...(name
+          ? {
+              name: {
+                contains: name,
+                mode: "insensitive" as const,
+              },
+            }
+          : {}),
+        ...(type ? { type: type as
+          | "ASSET"
+          | "LIABILITY"
+          | "EQUITY"
+          | "REVENUE"
+          | "EXPENSE" } : {}),
+        ...(active !== undefined ? { active } : {}),
+        ...(organizationId ? { organizationId } : {}),
+      };
+
+      const [accounts, totalCount] = await Promise.all([
+        prisma.glAccount.findMany({
+          where,
+          orderBy: {
+            code: "asc",
+          },
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+          include: {
+            organization: true,
+          },
+        }),
+        prisma.glAccount.count({
+          where,
+        }),
+      ]);
+
+      return {
+        data: accounts,
+        meta: {
+          page,
+          pageSize,
+          totalCount,
+          totalPages: Math.ceil(totalCount / pageSize),
+        },
+      };
     },
   );
 
