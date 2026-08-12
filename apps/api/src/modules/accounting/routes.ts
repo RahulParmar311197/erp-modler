@@ -169,4 +169,97 @@ export async function accountingRoutes(
       });
     },
   );
+
+  // =========================================================
+  // TRIAL BALANCE
+  // =========================================================
+
+  app.get(
+    "/api/gl/trial-balance",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "user.view"),
+      ],
+    },
+    async (request) => {
+      const claims = request.user as AuthClaims;
+
+      const accounts = await prisma.glAccount.findMany({
+        where: {
+          tenantId: claims.tenantId,
+          active: true,
+        },
+        orderBy: {
+          code: "asc",
+        },
+      });
+
+      const lines = await prisma.journalLine.findMany({
+        where: {
+          tenantId: claims.tenantId,
+          journalEntry: {
+            status: "POSTED",
+          },
+        },
+        select: {
+          accountId: true,
+          debit: true,
+          credit: true,
+        },
+      });
+
+      const balances = new Map<
+        string,
+        { debit: number; credit: number }
+      >();
+
+      for (const line of lines) {
+        const current = balances.get(line.accountId) ?? {
+          debit: 0,
+          credit: 0,
+        };
+
+        current.debit += Number(line.debit);
+        current.credit += Number(line.credit);
+
+        balances.set(line.accountId, current);
+      }
+
+      const data = accounts.map((account) => {
+        const balance = balances.get(account.id) ?? {
+          debit: 0,
+          credit: 0,
+        };
+
+        const net = balance.debit - balance.credit;
+
+        return {
+          accountId: account.id,
+          code: account.code,
+          name: account.name,
+          type: account.type,
+          debit: balance.debit,
+          credit: balance.credit,
+          balance: net,
+        };
+      });
+
+      const totals = data.reduce(
+        (sum, row) => ({
+          debit: sum.debit + row.debit,
+          credit: sum.credit + row.credit,
+          balance: sum.balance + row.balance,
+        }),
+        { debit: 0, credit: 0, balance: 0 },
+      );
+
+      return {
+        data,
+        totals,
+      };
+    },
+  );
+
 }
