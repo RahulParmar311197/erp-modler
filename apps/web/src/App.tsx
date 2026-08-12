@@ -46,6 +46,10 @@ function App() {
   const [paymentBill, setPaymentBill] = useState<Bill | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentNumber, setPaymentNumber] = useState("");
+  const [arInvoices, setArInvoices] = useState<any[]>([]);
+  const [arPaymentInvoice, setArPaymentInvoice] = useState<any | null>(null);
+  const [arPaymentAmount, setArPaymentAmount] = useState("");
+  const [arPaymentNumber, setArPaymentNumber] = useState("");
 
 
   const [billNumber, setBillNumber] = useState("");
@@ -114,11 +118,27 @@ function App() {
     }
   }
 
+  async function loadReceivables(authToken: string) {
+    const response = await fetch(`${API}/api/sales-invoices`, {
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error("Unable to load sales invoices");
+    }
+
+    const result = await response.json();
+    setArInvoices(result.data ?? []);
+  }
+
   useEffect(() => {
     async function initialize() {
       try {
         const authToken = await login();
         await loadData(authToken);
+      await loadReceivables(authToken);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unexpected error");
       } finally {
@@ -294,6 +314,87 @@ function App() {
       ),
     [bills],
   );
+
+  async function recordArPayment(event: React.FormEvent) {
+    event.preventDefault();
+
+    if (!arPaymentInvoice || !arPaymentNumber.trim()) {
+      setError("Payment number is required.");
+      return;
+    }
+
+    const amount = Number(arPaymentAmount);
+    const outstanding =
+      Number(arPaymentInvoice.totalAmount) -
+      Number(arPaymentInvoice.paidAmount);
+
+    if (!Number.isFinite(amount) || amount <= 0 || amount > outstanding) {
+      setError(
+        `Payment must be greater than 0 and no more than ₹${outstanding.toLocaleString("en-IN")}.`,
+      );
+      return;
+    }
+
+    if (!token) {
+      setError("Authentication token is missing.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+
+    try {
+      const response = await fetch(
+        `${API}/api/sales-invoices/${arPaymentInvoice.id}/payments`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            paymentNumber: arPaymentNumber.trim(),
+            amount,
+            notes: "AR payment recorded from dashboard",
+          }),
+        },
+      );
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          result?.errors?.[0]?.message ?? "Unable to record customer payment",
+        );
+      }
+
+      await loadReceivables(token);
+
+      setArPaymentInvoice(null);
+      setArPaymentAmount("");
+      setArPaymentNumber("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to record payment");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const receivableTotals = useMemo(() => {
+    return arInvoices.reduce(
+      (result, invoice) => {
+        const total = Number(invoice.totalAmount);
+        const paid = Number(invoice.paidAmount);
+
+        result.total += total;
+        result.paid += paid;
+        result.outstanding += total - paid;
+
+        return result;
+      },
+      { total: 0, paid: 0, outstanding: 0 },
+    );
+  }, [arInvoices]);
 
   if (loading) {
     return <main className="app">Loading ERP MODLER...</main>;
@@ -597,6 +698,191 @@ function App() {
           </form>
         </div>
       )}
+
+      <section className="panel ar-panel">
+        <div className="panel-header">
+          <div>
+            <div className="eyebrow">RECEIVABLES</div>
+            <h2>Accounts Receivable</h2>
+            <p>Customer invoices and outstanding balances</p>
+          </div>
+        </div>
+
+        <div className="cards">
+          <div className="card">
+            <span>Invoices</span>
+            <strong>{arInvoices.length}</strong>
+          </div>
+
+          <div className="card">
+            <span>Invoiced</span>
+            <strong>₹{receivableTotals.total.toLocaleString("en-IN")}</strong>
+          </div>
+
+          <div className="card">
+            <span>Collected</span>
+            <strong>₹{receivableTotals.paid.toLocaleString("en-IN")}</strong>
+          </div>
+
+          <div className="card">
+            <span>Outstanding</span>
+            <strong>₹{receivableTotals.outstanding.toLocaleString("en-IN")}</strong>
+          </div>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Invoice</th>
+                <th>Customer</th>
+                <th>Total</th>
+                <th>Paid</th>
+                <th>Outstanding</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {arInvoices.map((invoice) => {
+                const total = Number(invoice.totalAmount);
+                const paid = Number(invoice.paidAmount);
+
+                return (
+                  <tr key={invoice.id}>
+                    <td><strong>{invoice.invoiceNumber}</strong></td>
+                    <td>
+                      <strong>{invoice.customer?.name ?? "—"}</strong>
+                      <small>{invoice.customer?.code ?? ""}</small>
+                    </td>
+                    <td>₹{total.toLocaleString("en-IN")}</td>
+                    <td>₹{paid.toLocaleString("en-IN")}</td>
+                    <td>
+                      <strong>
+                        ₹{(total - paid).toLocaleString("en-IN")}
+                      </strong>
+                    </td>
+                    <td>
+                      <span className={`status ${invoice.status.toLowerCase()}`}>
+                        {invoice.status.replaceAll("_", " ")}
+                      </span>
+                    </td>
+                    <td>
+                      {(invoice.status === "POSTED" ||
+                        invoice.status === "PARTIALLY_PAID") &&
+                        total - paid > 0 && (
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => {
+                              setArPaymentInvoice(invoice);
+                              setArPaymentAmount("");
+                              setArPaymentNumber("");
+                              setError("");
+                            }}
+                          >
+                            Record Payment
+                          </button>
+                        )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {arPaymentInvoice && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setArPaymentInvoice(null)}
+        >
+          <form
+            className="modal"
+            onSubmit={recordArPayment}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <div className="eyebrow">ACCOUNTS RECEIVABLE</div>
+                <h2>Record Customer Payment</h2>
+              </div>
+
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setArPaymentInvoice(null)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="payment-summary">
+              <div>
+                <span>Invoice</span>
+                <strong>{arPaymentInvoice.invoiceNumber}</strong>
+              </div>
+              <div>
+                <span>Customer</span>
+                <strong>{arPaymentInvoice.customer?.name ?? "—"}</strong>
+              </div>
+              <div>
+                <span>Outstanding</span>
+                <strong>
+                  ₹
+                  {(
+                    Number(arPaymentInvoice.totalAmount) -
+                    Number(arPaymentInvoice.paidAmount)
+                  ).toLocaleString("en-IN")}
+                </strong>
+              </div>
+            </div>
+
+            <label>
+              Payment Number
+              <input
+                value={arPaymentNumber}
+                onChange={(event) => setArPaymentNumber(event.target.value)}
+                placeholder="CP-001"
+                required
+              />
+            </label>
+
+            <label>
+              Payment Amount
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={arPaymentAmount}
+                onChange={(event) => setArPaymentAmount(event.target.value)}
+                placeholder="0.00"
+                required
+              />
+            </label>
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setArPaymentInvoice(null)}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={saving}
+              >
+                {saving ? "Saving..." : "Record Payment"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
     </main>
   );
 }
