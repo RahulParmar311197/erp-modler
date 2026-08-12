@@ -392,4 +392,210 @@ export async function journalRoutes(
       };
     },
   );
+
+  app.get(
+    "/api/gl/accounts/:accountId/ledger",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "user.view"),
+      ],
+    },
+    async (request, reply) => {
+      const claims = request.user as AuthClaims;
+      const { accountId } = request.params as { accountId: string };
+
+      const query = request.query as {
+        fromDate?: unknown;
+        toDate?: unknown;
+      };
+
+      const parseDate = (value: unknown): Date | null | undefined => {
+        if (value === undefined || value === null || value === "") {
+          return null;
+        }
+
+        if (
+          typeof value !== "string" ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(value)
+        ) {
+          return undefined;
+        }
+
+        const date = new Date(`${value}T00:00:00.000Z`);
+
+        return Number.isNaN(date.getTime()) ? undefined : date;
+      };
+
+      const fromDate = parseDate(query.fromDate);
+      const toDate = parseDate(query.toDate);
+
+      if (
+        (query.fromDate !== undefined && fromDate === undefined) ||
+        (query.toDate !== undefined && toDate === undefined)
+      ) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message:
+                "fromDate and toDate must be valid dates in YYYY-MM-DD format",
+            },
+          ],
+        });
+      }
+
+      if (fromDate && toDate && fromDate > toDate) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "fromDate cannot be after toDate",
+            },
+          ],
+        });
+      }
+
+      const account = await prisma.glAccount.findFirst({
+        where: {
+          id: accountId,
+          tenantId: claims.tenantId,
+          active: true,
+        },
+      });
+
+      if (!account) {
+        return reply.code(404).send({
+          errors: [
+            {
+              code: "NOT_FOUND",
+              message: "GL account not found",
+            },
+          ],
+        });
+      }
+
+      const openingLines = fromDate
+        ? await prisma.journalLine.findMany({
+            where: {
+              tenantId: claims.tenantId,
+              accountId,
+              journalEntry: {
+                status: "POSTED",
+                entryDate: {
+                  lt: fromDate,
+                },
+              },
+            },
+            select: {
+              debit: true,
+              credit: true,
+            },
+          })
+        : [];
+
+      const openingBalance = openingLines.reduce(
+        (balance, line) =>
+          balance + Number(line.debit) - Number(line.credit),
+        0,
+      );
+
+      const lines = await prisma.journalLine.findMany({
+        where: {
+          tenantId: claims.tenantId,
+          accountId,
+          journalEntry: {
+            status: "POSTED",
+            ...(fromDate || toDate
+              ? {
+                  entryDate: {
+                    ...(fromDate ? { gte: fromDate } : {}),
+                    ...(toDate
+                      ? {
+                          lte: new Date(
+                            toDate.getTime() +
+                              24 * 60 * 60 * 1000 -
+                              1,
+                          ),
+                        }
+                      : {}),
+                  },
+                }
+              : {}),
+          },
+        },
+        orderBy: [
+          {
+            journalEntry: {
+              entryDate: "asc",
+            },
+          },
+          {
+            id: "asc",
+          },
+        ],
+        include: {
+          journalEntry: {
+            select: {
+              id: true,
+              entryNumber: true,
+              entryDate: true,
+              description: true,
+              sourceType: true,
+              sourceId: true,
+            },
+          },
+        },
+      });
+
+      let runningBalance = openingBalance;
+
+      const data = lines.map((line) => {
+        const debit = Number(line.debit);
+        const credit = Number(line.credit);
+
+        runningBalance += debit - credit;
+
+        return {
+          lineId: line.id,
+          journalEntryId: line.journalEntry.id,
+          entryNumber: line.journalEntry.entryNumber,
+          entryDate: line.journalEntry.entryDate,
+          description:
+            line.description ?? line.journalEntry.description,
+          sourceType: line.journalEntry.sourceType,
+          sourceId: line.journalEntry.sourceId,
+          debit,
+          credit,
+          balance: runningBalance,
+        };
+      });
+
+      const totals = data.reduce(
+        (sum, row) => ({
+          debit: sum.debit + row.debit,
+          credit: sum.credit + row.credit,
+          balance: row.balance,
+        }),
+        { debit: 0, credit: 0, balance: 0 },
+      );
+
+      return {
+        data: {
+          account: {
+            id: account.id,
+            code: account.code,
+            name: account.name,
+            type: account.type,
+          },
+          openingBalance,
+          lines: data,
+          totals,
+        },
+      };
+    },
+  );
+
+
 }
