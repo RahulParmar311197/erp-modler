@@ -7,6 +7,712 @@ datasource db {
   provider = "postgresql"
 }
 
+model Tenant {
+  id               String            @id @default(uuid())
+  code             String            @unique
+  name             String
+  status           TenantStatus      @default(ACTIVE)
+  defaultCurrency  String            @default("USD")
+  timezone         String            @default("UTC")
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  auditEvents      AuditEvent[]
+  customers        Customer[]
+  customerPayments CustomerPayment[]
+  goodsReceipts    GoodsReceipt[]
+  items            Item[]
+  itemGroups       ItemGroup[]
+  locations        Location[]
+  organizations    Organization[]
+  purchaseOrders   PurchaseOrder[]
+  roles            Role[]
+  salesInvoices    SalesInvoice[]
+  salesOrders      SalesOrder[]
+  shipments        Shipment[]
+  stockBalances    StockBalance[]
+  stockMovements   StockMovement[]
+  suppliers        Supplier[]
+  unitOfMeasures   UnitOfMeasure[]
+  users            User[]
+  vendorBills      VendorBill[]
+  vendorPayments   VendorPayment[]
+  warehouses       Warehouse[]
+  warehouseBins    WarehouseBin[]
+  warehouseZones   WarehouseZone[]
+}
+
+model Organization {
+  id             String           @id @default(uuid())
+  tenantId       String
+  parentId       String?
+  code           String
+  name           String
+  type           OrganizationType
+  active         Boolean          @default(true)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  customers      Customer[]
+  locations      Location[]
+  parent         Organization?    @relation("OrganizationTree", fields: [parentId], references: [id])
+  children       Organization[]   @relation("OrganizationTree")
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrders PurchaseOrder[]
+  salesInvoices  SalesInvoice[]
+  salesOrders    SalesOrder[]
+  shipments      Shipment[]
+  suppliers      Supplier[]
+  users          User[]
+  vendorBills    VendorBill[]
+  warehouses     Warehouse[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, parentId])
+}
+
+model User {
+  id             String        @id @default(uuid())
+  tenantId       String
+  organizationId String?
+  email          String
+  name           String
+  passwordHash   String
+  status         UserStatus    @default(INVITED)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  auditEvents    AuditEvent[]  @relation("AuditActor")
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  roles          UserRole[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, organizationId])
+}
+
+model Role {
+  id          String           @id @default(uuid())
+  tenantId    String
+  code        String
+  name        String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  permissions RolePermission[]
+  users       UserRole[]
+
+  @@unique([tenantId, code])
+}
+
+model Permission {
+  id          String           @id @default(uuid())
+  code        String           @unique
+  description String?
+  createdAt   DateTime         @default(now())
+  roles       RolePermission[]
+}
+
+model UserRole {
+  userId String
+  roleId String
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model AuditEvent {
+  id            String   @id @default(uuid())
+  tenantId      String
+  actorUserId   String?
+  action        String
+  entityType    String
+  entityId      String?
+  requestId     String?
+  previousState Json?
+  newState      Json?
+  createdAt     DateTime @default(now())
+  actor         User?    @relation("AuditActor", fields: [actorUserId], references: [id])
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, createdAt])
+}
+
+model Location {
+  id             String        @id @default(uuid())
+  tenantId       String
+  organizationId String?
+  code           String
+  name           String
+  addressLine1   String?
+  addressLine2   String?
+  city           String?
+  state          String?
+  postalCode     String?
+  country        String        @default("IN")
+  timezone       String?
+  active         Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouses     Warehouse[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, organizationId])
+}
+
+model Warehouse {
+  id                String             @id @default(uuid())
+  tenantId          String
+  organizationId    String?
+  locationId        String
+  code              String
+  name              String
+  warehouseType     String             @default("STANDARD")
+  active            Boolean            @default(true)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  goodsReceiptLines GoodsReceiptLine[]
+  shipments         Shipment[]
+  shipmentLines     ShipmentLine[]
+  stockBalances     StockBalance[]
+  stockMovements    StockMovement[]
+  location          Location           @relation(fields: [locationId], references: [id])
+  organization      Organization?      @relation(fields: [organizationId], references: [id])
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  zones             WarehouseZone[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, organizationId])
+  @@index([tenantId, locationId])
+}
+
+model WarehouseZone {
+  id          String         @id @default(uuid())
+  tenantId    String
+  warehouseId String
+  code        String
+  name        String
+  active      Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  bins        WarehouseBin[]
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse   Warehouse      @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, warehouseId, code])
+  @@index([tenantId, warehouseId])
+}
+
+model WarehouseBin {
+  id                String             @id @default(uuid())
+  tenantId          String
+  zoneId            String
+  code              String
+  name              String
+  active            Boolean            @default(true)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  goodsReceiptLines GoodsReceiptLine[]
+  shipmentLines     ShipmentLine[]
+  stockBalances     StockBalance[]
+  stockMovements    StockMovement[]
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  zone              WarehouseZone      @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, zoneId, code])
+  @@index([tenantId, zoneId])
+}
+
+model ItemGroup {
+  id        String   @id @default(uuid())
+  tenantId  String
+  code      String
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  items     Item[]
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+}
+
+model UnitOfMeasure {
+  id                 String              @id @default(uuid())
+  tenantId           String
+  code               String
+  name               String
+  symbol             String?
+  active             Boolean             @default(true)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  items              Item[]
+  purchaseOrderLines PurchaseOrderLine[]
+  salesInvoiceLines  SalesInvoiceLine[]
+  salesOrderLines    SalesOrderLine[]
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+}
+
+model Item {
+  id                 String              @id @default(uuid())
+  tenantId           String
+  itemGroupId        String?
+  baseUomId          String
+  sku                String
+  name               String
+  description        String?
+  itemType           String              @default("STOCK")
+  trackInventory     Boolean             @default(true)
+  active             Boolean             @default(true)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  goodsReceiptLines  GoodsReceiptLine[]
+  baseUom            UnitOfMeasure       @relation(fields: [baseUomId], references: [id])
+  itemGroup          ItemGroup?          @relation(fields: [itemGroupId], references: [id])
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrderLines PurchaseOrderLine[]
+  salesInvoiceLines  SalesInvoiceLine[]
+  salesOrderLines    SalesOrderLine[]
+  shipmentLines      ShipmentLine[]
+  stockBalances      StockBalance[]
+  stockMovements     StockMovement[]
+  vendorBillLines    VendorBillLine[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId, itemGroupId])
+  @@index([tenantId, baseUomId])
+}
+
+model StockBalance {
+  id          String        @id @default(uuid())
+  tenantId    String
+  itemId      String
+  warehouseId String
+  binId       String?
+  quantity    Decimal       @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  bin         WarehouseBin? @relation(fields: [binId], references: [id])
+  item        Item          @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse   Warehouse     @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, itemId, warehouseId, binId])
+  @@index([tenantId, itemId])
+  @@index([tenantId, warehouseId])
+  @@index([tenantId, binId])
+}
+
+model StockMovement {
+  id            String        @id @default(uuid())
+  tenantId      String
+  itemId        String
+  warehouseId   String
+  binId         String?
+  movementType  String
+  quantity      Decimal
+  referenceType String?
+  referenceId   String?
+  notes         String?
+  createdAt     DateTime      @default(now())
+  bin           WarehouseBin? @relation(fields: [binId], references: [id])
+  item          Item          @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse     Warehouse     @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, itemId, createdAt])
+  @@index([tenantId, warehouseId, createdAt])
+}
+
+model Supplier {
+  id             String          @id @default(uuid())
+  tenantId       String
+  organizationId String?
+  code           String
+  name           String
+  email          String?
+  phone          String?
+  taxNumber      String?
+  paymentTerms   String?
+  currency       String          @default("INR")
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  purchaseOrders PurchaseOrder[]
+  organization   Organization?   @relation(fields: [organizationId], references: [id])
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vendorBills    VendorBill[]
+  vendorPayments VendorPayment[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, organizationId])
+}
+
+model PurchaseOrder {
+  id             String              @id @default(uuid())
+  tenantId       String
+  organizationId String
+  supplierId     String
+  poNumber       String
+  status         PurchaseOrderStatus @default(DRAFT)
+  orderDate      DateTime            @default(now())
+  expectedDate   DateTime?
+  currency       String              @default("INR")
+  notes          String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  goodsReceipts  GoodsReceipt[]
+  organization   Organization        @relation(fields: [organizationId], references: [id])
+  supplier       Supplier            @relation(fields: [supplierId], references: [id])
+  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines          PurchaseOrderLine[]
+  vendorBills    VendorBill[]
+
+  @@unique([tenantId, poNumber])
+  @@index([tenantId, supplierId])
+  @@index([tenantId, organizationId])
+  @@index([tenantId, status])
+}
+
+model PurchaseOrderLine {
+  id                String             @id @default(uuid())
+  purchaseOrderId   String
+  itemId            String
+  uomId             String
+  quantity          Decimal
+  unitPrice         Decimal
+  receivedQty       Decimal            @default(0)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  goodsReceiptLines GoodsReceiptLine[]
+  item              Item               @relation(fields: [itemId], references: [id])
+  purchaseOrder     PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  uom               UnitOfMeasure      @relation(fields: [uomId], references: [id])
+  vendorBillLines   VendorBillLine[]
+
+  @@index([purchaseOrderId])
+  @@index([itemId])
+}
+
+model GoodsReceipt {
+  id              String             @id @default(uuid())
+  tenantId        String
+  purchaseOrderId String
+  receiptNumber   String
+  status          GoodsReceiptStatus @default(POSTED)
+  receiptDate     DateTime           @default(now())
+  notes           String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  purchaseOrder   PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines           GoodsReceiptLine[]
+
+  @@unique([tenantId, receiptNumber])
+  @@index([tenantId, purchaseOrderId])
+}
+
+model GoodsReceiptLine {
+  id                  String            @id @default(uuid())
+  tenantId            String
+  goodsReceiptId      String
+  purchaseOrderLineId String
+  itemId              String
+  warehouseId         String
+  binId               String?
+  quantity            Decimal
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  bin                 WarehouseBin?     @relation(fields: [binId], references: [id])
+  goodsReceipt        GoodsReceipt      @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  item                Item              @relation(fields: [itemId], references: [id])
+  purchaseOrderLine   PurchaseOrderLine @relation(fields: [purchaseOrderLineId], references: [id])
+  warehouse           Warehouse         @relation(fields: [warehouseId], references: [id])
+  vendorBillLines     VendorBillLine[]
+
+  @@index([tenantId])
+  @@index([goodsReceiptId])
+  @@index([purchaseOrderLineId])
+}
+
+model Customer {
+  id               String            @id @default(uuid())
+  tenantId         String
+  organizationId   String?
+  code             String
+  name             String
+  email            String?
+  phone            String?
+  taxNumber        String?
+  paymentTerms     String?
+  currency         String            @default("INR")
+  active           Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  organization     Organization?     @relation(fields: [organizationId], references: [id])
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerPayments CustomerPayment[]
+  salesInvoices    SalesInvoice[]
+  salesOrders      SalesOrder[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, organizationId])
+}
+
+model VendorBill {
+  id              String           @id @default(uuid())
+  tenantId        String
+  organizationId  String
+  supplierId      String
+  purchaseOrderId String?
+  billNumber      String
+  status          VendorBillStatus @default(DRAFT)
+  billDate        DateTime         @default(now())
+  dueDate         DateTime?
+  currency        String           @default("INR")
+  subtotal        Decimal          @default(0)
+  taxAmount       Decimal          @default(0)
+  totalAmount     Decimal          @default(0)
+  paidAmount      Decimal          @default(0)
+  notes           String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  purchaseOrder   PurchaseOrder?   @relation(fields: [purchaseOrderId], references: [id])
+  supplier        Supplier         @relation(fields: [supplierId], references: [id])
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines           VendorBillLine[]
+  payments        VendorPayment[]
+
+  @@unique([tenantId, billNumber])
+  @@index([tenantId, supplierId])
+  @@index([tenantId, purchaseOrderId])
+  @@index([tenantId, status])
+}
+
+model VendorBillLine {
+  id                  String             @id @default(uuid())
+  tenantId            String
+  vendorBillId        String
+  purchaseOrderLineId String?
+  goodsReceiptLineId  String?
+  itemId              String
+  description         String?
+  quantity            Decimal
+  unitPrice           Decimal
+  lineTotal           Decimal
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  goodsReceiptLine    GoodsReceiptLine?  @relation(fields: [goodsReceiptLineId], references: [id])
+  item                Item               @relation(fields: [itemId], references: [id])
+  purchaseOrderLine   PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id])
+  vendorBill          VendorBill         @relation(fields: [vendorBillId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, vendorBillId])
+  @@index([tenantId, purchaseOrderLineId])
+  @@index([tenantId, goodsReceiptLineId])
+  @@index([tenantId, itemId])
+}
+
+model VendorPayment {
+  id            String     @id @default(uuid())
+  tenantId      String
+  supplierId    String
+  vendorBillId  String
+  paymentNumber String
+  paymentDate   DateTime   @default(now())
+  amount        Decimal
+  currency      String     @default("INR")
+  notes         String?
+  createdAt     DateTime   @default(now())
+  supplier      Supplier   @relation(fields: [supplierId], references: [id])
+  tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vendorBill    VendorBill @relation(fields: [vendorBillId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, paymentNumber])
+  @@index([tenantId, supplierId])
+  @@index([tenantId, vendorBillId])
+}
+
+model SalesOrder {
+  id             String           @id @default(uuid())
+  tenantId       String
+  organizationId String
+  customerId     String
+  orderNumber    String
+  status         SalesOrderStatus @default(DRAFT)
+  orderDate      DateTime         @default(now())
+  requestedDate  DateTime?
+  currency       String           @default("INR")
+  notes          String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  salesInvoices  SalesInvoice[]
+  customer       Customer         @relation(fields: [customerId], references: [id])
+  organization   Organization     @relation(fields: [organizationId], references: [id])
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines          SalesOrderLine[]
+  shipments      Shipment[]
+
+  @@unique([tenantId, orderNumber])
+  @@index([tenantId, customerId])
+  @@index([tenantId, organizationId])
+  @@index([tenantId, status])
+}
+
+model SalesOrderLine {
+  id                String             @id @default(uuid())
+  salesOrderId      String
+  itemId            String
+  uomId             String
+  quantity          Decimal
+  unitPrice         Decimal
+  shippedQty        Decimal            @default(0)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  salesInvoiceLines SalesInvoiceLine[]
+  item              Item               @relation(fields: [itemId], references: [id])
+  salesOrder        SalesOrder         @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  uom               UnitOfMeasure      @relation(fields: [uomId], references: [id])
+  shipmentLines     ShipmentLine[]
+
+  @@index([salesOrderId])
+  @@index([itemId])
+}
+
+model Shipment {
+  id             String         @id @default(uuid())
+  tenantId       String
+  salesOrderId   String
+  shipmentNumber String
+  status         ShipmentStatus @default(POSTED)
+  shipmentDate   DateTime       @default(now())
+  warehouseId    String
+  notes          String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  organizationId String?
+  organization   Organization?  @relation(fields: [organizationId], references: [id])
+  salesOrder     SalesOrder     @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse      Warehouse      @relation(fields: [warehouseId], references: [id])
+  lines          ShipmentLine[]
+
+  @@unique([tenantId, shipmentNumber])
+  @@index([tenantId, salesOrderId])
+  @@index([tenantId, warehouseId])
+}
+
+model ShipmentLine {
+  id               String         @id @default(uuid())
+  tenantId         String
+  shipmentId       String
+  salesOrderLineId String
+  itemId           String
+  warehouseId      String
+  binId            String?
+  quantity         Decimal
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  bin              WarehouseBin?  @relation(fields: [binId], references: [id])
+  item             Item           @relation(fields: [itemId], references: [id])
+  salesOrderLine   SalesOrderLine @relation(fields: [salesOrderLineId], references: [id])
+  shipment         Shipment       @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  warehouse        Warehouse      @relation(fields: [warehouseId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, shipmentId])
+  @@index([tenantId, salesOrderLineId])
+}
+
+model SalesInvoice {
+  id             String             @id @default(uuid())
+  tenantId       String
+  organizationId String
+  customerId     String
+  salesOrderId   String?
+  invoiceNumber  String
+  status         SalesInvoiceStatus @default(DRAFT)
+  invoiceDate    DateTime           @default(now())
+  dueDate        DateTime?
+  currency       String             @default("INR")
+  subtotal       Decimal            @default(0)
+  taxAmount      Decimal            @default(0)
+  totalAmount    Decimal            @default(0)
+  paidAmount     Decimal            @default(0)
+  notes          String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  payments       CustomerPayment[]
+  customer       Customer           @relation(fields: [customerId], references: [id])
+  organization   Organization       @relation(fields: [organizationId], references: [id])
+  salesOrder     SalesOrder?        @relation(fields: [salesOrderId], references: [id])
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines          SalesInvoiceLine[]
+
+  @@unique([tenantId, invoiceNumber])
+  @@index([tenantId, customerId])
+  @@index([tenantId, salesOrderId])
+  @@index([tenantId, status])
+}
+
+model SalesInvoiceLine {
+  id               String          @id @default(uuid())
+  tenantId         String
+  salesInvoiceId   String
+  salesOrderLineId String?
+  itemId           String
+  description      String?
+  quantity         Decimal
+  unitPrice        Decimal
+  lineTotal        Decimal
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  unitOfMeasureId  String?
+  item             Item            @relation(fields: [itemId], references: [id])
+  salesInvoice     SalesInvoice    @relation(fields: [salesInvoiceId], references: [id], onDelete: Cascade)
+  salesOrderLine   SalesOrderLine? @relation(fields: [salesOrderLineId], references: [id])
+  unitOfMeasure    UnitOfMeasure?  @relation(fields: [unitOfMeasureId], references: [id])
+
+  @@index([tenantId, salesInvoiceId])
+  @@index([tenantId, salesOrderLineId])
+  @@index([tenantId, itemId])
+}
+
+model CustomerPayment {
+  id             String       @id @default(uuid())
+  tenantId       String
+  customerId     String
+  salesInvoiceId String
+  paymentNumber  String
+  paymentDate    DateTime     @default(now())
+  amount         Decimal
+  currency       String       @default("INR")
+  notes          String?
+  createdAt      DateTime     @default(now())
+  customer       Customer     @relation(fields: [customerId], references: [id])
+  salesInvoice   SalesInvoice @relation(fields: [salesInvoiceId], references: [id], onDelete: Cascade)
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, paymentNumber])
+  @@index([tenantId, customerId])
+  @@index([tenantId, salesInvoiceId])
+}
+
 enum TenantStatus {
   ACTIVE
   SUSPENDED
@@ -28,373 +734,6 @@ enum OrganizationType {
   BRANCH
 }
 
-model Tenant {
-  id              String       @id @default(uuid())
-  code            String       @unique
-  name            String
-  status          TenantStatus @default(ACTIVE)
-  defaultCurrency String       @default("USD")
-  timezone        String       @default("UTC")
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-
-  organizations    Organization[]
-  locations        Location[]
-  warehouses       Warehouse[]
-  warehouseZones   WarehouseZone[]
-  warehouseBins    WarehouseBin[]
-  users            User[]
-  roles            Role[]
-  auditEvents      AuditEvent[]
-  itemGroups       ItemGroup[]
-  unitOfMeasures   UnitOfMeasure[]
-  items            Item[]
-  stockBalances    StockBalance[]
-  stockMovements   StockMovement[]
-  suppliers        Supplier[]
-  purchaseOrders   PurchaseOrder[]
-  goodsReceipts    GoodsReceipt[]
-  salesInvoices    SalesInvoice[]
-  customerPayments CustomerPayment[]
-  customers        Customer[]
-  salesOrders      SalesOrder[]
-  shipments        Shipment[]
-}
-
-model Organization {
-  id        String           @id @default(uuid())
-  tenantId  String
-  parentId  String?
-  code      String
-  name      String
-  type      OrganizationType
-  active    Boolean          @default(true)
-  createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
-
-  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  parent         Organization?   @relation("OrganizationTree", fields: [parentId], references: [id])
-  children       Organization[]  @relation("OrganizationTree")
-  users          User[]
-  locations      Location[]
-  warehouses     Warehouse[]
-  suppliers      Supplier[]
-  purchaseOrders PurchaseOrder[]
-  customers      Customer[]
-  salesOrders    SalesOrder[]
-  shipments      Shipment[]
-  salesInvoices  SalesInvoice[]
-
-  @@unique([tenantId, code])
-  @@index([tenantId, parentId])
-}
-
-model User {
-  id             String     @id @default(uuid())
-  tenantId       String
-  organizationId String?
-  email          String
-  name           String
-  passwordHash   String
-  status         UserStatus @default(INVITED)
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
-
-  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  organization Organization? @relation(fields: [organizationId], references: [id])
-  roles        UserRole[]
-  auditEvents  AuditEvent[]  @relation("AuditActor")
-
-  @@unique([tenantId, email])
-  @@index([tenantId, organizationId])
-}
-
-model Role {
-  id        String   @id @default(uuid())
-  tenantId  String
-  code      String
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  users       UserRole[]
-  permissions RolePermission[]
-
-  @@unique([tenantId, code])
-}
-
-model Permission {
-  id          String   @id @default(uuid())
-  code        String   @unique
-  description String?
-  createdAt   DateTime @default(now())
-
-  roles RolePermission[]
-}
-
-model UserRole {
-  userId String
-  roleId String
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
-
-  @@id([userId, roleId])
-}
-
-model RolePermission {
-  roleId       String
-  permissionId String
-
-  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
-
-  @@id([roleId, permissionId])
-}
-
-model AuditEvent {
-  id            String   @id @default(uuid())
-  tenantId      String
-  actorUserId   String?
-  action        String
-  entityType    String
-  entityId      String?
-  requestId     String?
-  previousState Json?
-  newState      Json?
-  createdAt     DateTime @default(now())
-
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  actor  User?  @relation("AuditActor", fields: [actorUserId], references: [id])
-
-  @@index([tenantId, entityType, entityId])
-  @@index([tenantId, createdAt])
-}
-
-model Location {
-  id             String   @id @default(uuid())
-  tenantId       String
-  organizationId String?
-  code           String
-  name           String
-  addressLine1   String?
-  addressLine2   String?
-  city           String?
-  state          String?
-  postalCode     String?
-  country        String   @default("IN")
-  timezone       String?
-  active         Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  organization Organization? @relation(fields: [organizationId], references: [id])
-  warehouses   Warehouse[]
-
-  @@unique([tenantId, code])
-  @@index([tenantId, organizationId])
-}
-
-model Warehouse {
-  goodsReceiptLines GoodsReceiptLine[]
-  id                String             @id @default(uuid())
-  tenantId          String
-  organizationId    String?
-  locationId        String
-  code              String
-  name              String
-  warehouseType     String             @default("STANDARD")
-  active            Boolean            @default(true)
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-
-  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  organization   Organization?   @relation(fields: [organizationId], references: [id])
-  location       Location        @relation(fields: [locationId], references: [id])
-  zones          WarehouseZone[]
-  stockBalances  StockBalance[]
-  stockMovements StockMovement[]
-  shipments      Shipment[]
-  shipmentLines  ShipmentLine[]
-
-  @@unique([tenantId, code])
-  @@index([tenantId, organizationId])
-  @@index([tenantId, locationId])
-}
-
-model WarehouseZone {
-  id          String   @id @default(uuid())
-  tenantId    String
-  warehouseId String
-  code        String
-  name        String
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  tenant    Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  warehouse Warehouse      @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  bins      WarehouseBin[]
-
-  @@unique([tenantId, warehouseId, code])
-  @@index([tenantId, warehouseId])
-}
-
-model WarehouseBin {
-  goodsReceiptLines GoodsReceiptLine[]
-  id                String             @id @default(uuid())
-  tenantId          String
-  zoneId            String
-  code              String
-  name              String
-  active            Boolean            @default(true)
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-
-  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  zone           WarehouseZone   @relation(fields: [zoneId], references: [id], onDelete: Cascade)
-  stockBalances  StockBalance[]
-  stockMovements StockMovement[]
-  shipmentLines  ShipmentLine[]
-
-  @@unique([tenantId, zoneId, code])
-  @@index([tenantId, zoneId])
-}
-
-model ItemGroup {
-  id        String   @id @default(uuid())
-  tenantId  String
-  code      String
-  name      String
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  items  Item[]
-
-  @@unique([tenantId, code])
-  @@index([tenantId])
-}
-
-model UnitOfMeasure {
-  id        String   @id @default(uuid())
-  tenantId  String
-  code      String
-  name      String
-  symbol    String?
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  items              Item[]
-  purchaseOrderLines PurchaseOrderLine[]
-  salesOrderLines    SalesOrderLine[]
-  salesInvoiceLines  SalesInvoiceLine[]
-
-  @@unique([tenantId, code])
-  @@index([tenantId])
-}
-
-model Item {
-  goodsReceiptLines GoodsReceiptLine[]
-  id                String             @id @default(uuid())
-  tenantId          String
-  itemGroupId       String?
-  baseUomId         String
-  sku               String
-  name              String
-  description       String?
-  itemType          String             @default("STOCK")
-  trackInventory    Boolean            @default(true)
-  active            Boolean            @default(true)
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-
-  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  itemGroup          ItemGroup?          @relation(fields: [itemGroupId], references: [id])
-  baseUom            UnitOfMeasure       @relation(fields: [baseUomId], references: [id])
-  stockBalances      StockBalance[]
-  stockMovements     StockMovement[]
-  purchaseOrderLines PurchaseOrderLine[]
-  salesOrderLines    SalesOrderLine[]
-  shipmentLines      ShipmentLine[]
-  salesInvoiceLines  SalesInvoiceLine[]
-
-  @@unique([tenantId, sku])
-  @@index([tenantId, itemGroupId])
-  @@index([tenantId, baseUomId])
-}
-
-model StockBalance {
-  id          String   @id @default(uuid())
-  tenantId    String
-  itemId      String
-  warehouseId String
-  binId       String?
-  quantity    Decimal  @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  item      Item          @relation(fields: [itemId], references: [id], onDelete: Cascade)
-  warehouse Warehouse     @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  bin       WarehouseBin? @relation(fields: [binId], references: [id])
-
-  @@unique([tenantId, itemId, warehouseId, binId])
-  @@index([tenantId, itemId])
-  @@index([tenantId, warehouseId])
-  @@index([tenantId, binId])
-}
-
-model StockMovement {
-  id            String   @id @default(uuid())
-  tenantId      String
-  itemId        String
-  warehouseId   String
-  binId         String?
-  movementType  String
-  quantity      Decimal
-  referenceType String?
-  referenceId   String?
-  notes         String?
-  createdAt     DateTime @default(now())
-
-  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  item      Item          @relation(fields: [itemId], references: [id], onDelete: Cascade)
-  warehouse Warehouse     @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  bin       WarehouseBin? @relation(fields: [binId], references: [id])
-
-  @@index([tenantId, itemId, createdAt])
-  @@index([tenantId, warehouseId, createdAt])
-}
-
-model Supplier {
-  id             String   @id @default(uuid())
-  tenantId       String
-  organizationId String?
-  code           String
-  name           String
-  email          String?
-  phone          String?
-  taxNumber      String?
-  paymentTerms   String?
-  currency       String   @default("INR")
-  active         Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  organization   Organization?   @relation(fields: [organizationId], references: [id])
-  purchaseOrders PurchaseOrder[]
-
-  @@unique([tenantId, code])
-  @@index([tenantId, organizationId])
-}
-
 enum PurchaseOrderStatus {
   DRAFT
   SUBMITTED
@@ -405,123 +744,17 @@ enum PurchaseOrderStatus {
   CANCELLED
 }
 
-model PurchaseOrder {
-  id             String              @id @default(uuid())
-  tenantId       String
-  organizationId String
-  supplierId     String
-  poNumber       String
-  status         PurchaseOrderStatus @default(DRAFT)
-  orderDate      DateTime            @default(now())
-  expectedDate   DateTime?
-  currency       String              @default("INR")
-  notes          String?
-  createdAt      DateTime            @default(now())
-  updatedAt      DateTime            @updatedAt
-
-  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  organization  Organization        @relation(fields: [organizationId], references: [id])
-  supplier      Supplier            @relation(fields: [supplierId], references: [id])
-  lines         PurchaseOrderLine[]
-  goodsReceipts GoodsReceipt[]
-
-  @@unique([tenantId, poNumber])
-  @@index([tenantId, supplierId])
-  @@index([tenantId, organizationId])
-  @@index([tenantId, status])
-}
-
-model PurchaseOrderLine {
-  id              String   @id @default(uuid())
-  purchaseOrderId String
-  itemId          String
-  uomId           String
-  quantity        Decimal
-  unitPrice       Decimal
-  receivedQty     Decimal  @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  goodsReceiptLines GoodsReceiptLine[]
-
-  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  item          Item          @relation(fields: [itemId], references: [id])
-  uom           UnitOfMeasure @relation(fields: [uomId], references: [id])
-
-  @@index([purchaseOrderId])
-  @@index([itemId])
-}
-
 enum GoodsReceiptStatus {
   POSTED
   CANCELLED
 }
 
-model GoodsReceipt {
-  id              String             @id @default(uuid())
-  tenantId        String
-  purchaseOrderId String
-  receiptNumber   String
-  status          GoodsReceiptStatus @default(POSTED)
-  receiptDate     DateTime           @default(now())
-  notes           String?
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
-
-  tenant        Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  purchaseOrder PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  lines         GoodsReceiptLine[]
-
-  @@unique([tenantId, receiptNumber])
-  @@index([tenantId, purchaseOrderId])
-}
-
-model GoodsReceiptLine {
-  id                  String   @id @default(uuid())
-  tenantId            String
-  goodsReceiptId      String
-  purchaseOrderLineId String
-  itemId              String
-  warehouseId         String
-  binId               String?
-  quantity            Decimal
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
-
-  goodsReceipt      GoodsReceipt      @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
-  purchaseOrderLine PurchaseOrderLine @relation(fields: [purchaseOrderLineId], references: [id])
-  item              Item              @relation(fields: [itemId], references: [id])
-  warehouse         Warehouse         @relation(fields: [warehouseId], references: [id])
-  bin               WarehouseBin?     @relation(fields: [binId], references: [id])
-
-  @@index([tenantId])
-  @@index([goodsReceiptId])
-  @@index([purchaseOrderLineId])
-}
-
-model Customer {
-  id             String   @id @default(uuid())
-  tenantId       String
-  organizationId String?
-  code           String
-  name           String
-  email          String?
-  phone          String?
-  taxNumber      String?
-  paymentTerms   String?
-  currency       String   @default("INR")
-  active         Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  organization     Organization?     @relation(fields: [organizationId], references: [id])
-  salesOrders      SalesOrder[]
-  salesInvoices    SalesInvoice[]
-  customerPayments CustomerPayment[]
-
-  @@unique([tenantId, code])
-  @@index([tenantId, organizationId])
+enum VendorBillStatus {
+  DRAFT
+  POSTED
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
 }
 
 enum SalesOrderStatus {
@@ -534,104 +767,9 @@ enum SalesOrderStatus {
   CANCELLED
 }
 
-model SalesOrder {
-  id             String           @id @default(uuid())
-  tenantId       String
-  organizationId String
-  customerId     String
-  orderNumber    String
-  status         SalesOrderStatus @default(DRAFT)
-  orderDate      DateTime         @default(now())
-  requestedDate  DateTime?
-  currency       String           @default("INR")
-  notes          String?
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
-
-  tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  organization  Organization     @relation(fields: [organizationId], references: [id])
-  customer      Customer         @relation(fields: [customerId], references: [id])
-  lines         SalesOrderLine[]
-  salesInvoices SalesInvoice[]
-  shipments     Shipment[]
-
-  @@unique([tenantId, orderNumber])
-  @@index([tenantId, customerId])
-  @@index([tenantId, organizationId])
-  @@index([tenantId, status])
-}
-
-model SalesOrderLine {
-  id           String   @id @default(uuid())
-  salesOrderId String
-  itemId       String
-  uomId        String
-  quantity     Decimal
-  unitPrice    Decimal
-  shippedQty   Decimal  @default(0)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  salesOrder        SalesOrder         @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
-  item              Item               @relation(fields: [itemId], references: [id])
-  uom               UnitOfMeasure      @relation(fields: [uomId], references: [id])
-  shipmentLines     ShipmentLine[]
-  salesInvoiceLines SalesInvoiceLine[]
-
-  @@index([salesOrderId])
-  @@index([itemId])
-}
-
 enum ShipmentStatus {
   POSTED
   CANCELLED
-}
-
-model Shipment {
-  id             String         @id @default(uuid())
-  tenantId       String
-  salesOrderId   String
-  shipmentNumber String
-  status         ShipmentStatus @default(POSTED)
-  shipmentDate   DateTime       @default(now())
-  warehouseId    String
-  notes          String?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
-
-  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  salesOrder     SalesOrder     @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
-  warehouse      Warehouse      @relation(fields: [warehouseId], references: [id])
-  lines          ShipmentLine[]
-  organization   Organization?  @relation(fields: [organizationId], references: [id])
-  organizationId String?
-
-  @@unique([tenantId, shipmentNumber])
-  @@index([tenantId, salesOrderId])
-  @@index([tenantId, warehouseId])
-}
-
-model ShipmentLine {
-  id               String   @id @default(uuid())
-  tenantId         String
-  shipmentId       String
-  salesOrderLineId String
-  itemId           String
-  warehouseId      String
-  binId            String?
-  quantity         Decimal
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-
-  shipment       Shipment       @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
-  salesOrderLine SalesOrderLine @relation(fields: [salesOrderLineId], references: [id])
-  item           Item           @relation(fields: [itemId], references: [id])
-  warehouse      Warehouse      @relation(fields: [warehouseId], references: [id])
-  bin            WarehouseBin?  @relation(fields: [binId], references: [id])
-
-  @@index([tenantId])
-  @@index([tenantId, shipmentId])
-  @@index([tenantId, salesOrderLineId])
 }
 
 enum SalesInvoiceStatus {
@@ -640,81 +778,4 @@ enum SalesInvoiceStatus {
   PARTIALLY_PAID
   PAID
   CANCELLED
-}
-
-model SalesInvoice {
-  id             String             @id @default(uuid())
-  tenantId       String
-  organizationId String
-  customerId     String
-  salesOrderId   String?
-  invoiceNumber  String
-  status         SalesInvoiceStatus @default(DRAFT)
-  invoiceDate    DateTime           @default(now())
-  dueDate        DateTime?
-  currency       String             @default("INR")
-  subtotal       Decimal            @default(0)
-  taxAmount      Decimal            @default(0)
-  totalAmount    Decimal            @default(0)
-  paidAmount     Decimal            @default(0)
-  notes          String?
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
-
-  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  organization Organization       @relation(fields: [organizationId], references: [id])
-  customer     Customer           @relation(fields: [customerId], references: [id])
-  salesOrder   SalesOrder?        @relation(fields: [salesOrderId], references: [id])
-  lines        SalesInvoiceLine[]
-  payments     CustomerPayment[]
-
-  @@unique([tenantId, invoiceNumber])
-  @@index([tenantId, customerId])
-  @@index([tenantId, salesOrderId])
-  @@index([tenantId, status])
-}
-
-model SalesInvoiceLine {
-  id               String   @id @default(uuid())
-  tenantId         String
-  salesInvoiceId   String
-  salesOrderLineId String?
-  itemId           String
-  description      String?
-  quantity         Decimal
-  unitPrice        Decimal
-  lineTotal        Decimal
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-
-  salesInvoice    SalesInvoice    @relation(fields: [salesInvoiceId], references: [id], onDelete: Cascade)
-  salesOrderLine  SalesOrderLine? @relation(fields: [salesOrderLineId], references: [id])
-  item            Item            @relation(fields: [itemId], references: [id])
-  unitOfMeasure   UnitOfMeasure?  @relation(fields: [unitOfMeasureId], references: [id])
-  unitOfMeasureId String?
-
-  @@index([tenantId, salesInvoiceId])
-  @@index([tenantId, salesOrderLineId])
-  @@index([tenantId, itemId])
-}
-
-model CustomerPayment {
-  id             String   @id @default(uuid())
-  tenantId       String
-  customerId     String
-  salesInvoiceId String
-  paymentNumber  String
-  paymentDate    DateTime @default(now())
-  amount         Decimal
-  currency       String   @default("INR")
-  notes          String?
-  createdAt      DateTime @default(now())
-
-  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer     Customer     @relation(fields: [customerId], references: [id])
-  salesInvoice SalesInvoice @relation(fields: [salesInvoiceId], references: [id], onDelete: Cascade)
-
-  @@unique([tenantId, paymentNumber])
-  @@index([tenantId, customerId])
-  @@index([tenantId, salesInvoiceId])
 }
