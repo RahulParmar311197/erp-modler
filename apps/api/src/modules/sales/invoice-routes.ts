@@ -560,6 +560,30 @@ export async function salesInvoiceRoutes(app: FastifyInstance, prisma: PrismaCli
           },
         });
 
+          await postJournalEntry(tx, {
+            tenantId: claims.tenantId,
+            organizationId: invoice.organizationId,
+            entryNumber: `AR-PAY-${paymentNumber}`,
+            entryDate: payment.paymentDate,
+            description: `Customer payment ${paymentNumber}`,
+            sourceType: "CustomerPayment",
+            sourceId: payment.id,
+            lines: [
+              {
+                accountCode: "1000",
+                description: `Cash / Bank - ${paymentNumber}`,
+                debit: amount,
+                credit: 0,
+              },
+              {
+                accountCode: "1100",
+                description: `Accounts receivable - ${paymentNumber}`,
+                debit: 0,
+                credit: amount,
+              },
+            ],
+          });
+
         const newPaidAmount =
           Number(invoice.paidAmount) + amount;
 
