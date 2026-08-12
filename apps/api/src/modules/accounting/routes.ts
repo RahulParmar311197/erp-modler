@@ -193,6 +193,185 @@ export async function accountingRoutes(
     },
   );
 
+  app.patch(
+    "/api/gl/accounts/:id",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "user.create"),
+      ],
+    },
+    async (request, reply) => {
+      const claims = request.user as AuthClaims;
+      const { id } = request.params as { id: string };
+
+      const body = request.body as {
+        name?: unknown;
+        type?: unknown;
+        organizationId?: unknown;
+        active?: unknown;
+      };
+
+      const account = await prisma.glAccount.findFirst({
+        where: {
+          id,
+          tenantId: claims.tenantId,
+        },
+      });
+
+      if (!account) {
+        return reply.code(404).send({
+          errors: [
+            {
+              code: "NOT_FOUND",
+              message: "GL account not found",
+            },
+          ],
+        });
+      }
+
+      const validTypes = [
+        "ASSET",
+        "LIABILITY",
+        "EQUITY",
+        "REVENUE",
+        "EXPENSE",
+      ];
+
+      const name =
+        body.name === undefined
+          ? account.name
+          : typeof body.name === "string"
+            ? body.name.trim()
+            : "";
+
+      const type =
+        body.type === undefined
+          ? account.type
+          : typeof body.type === "string"
+            ? body.type.trim().toUpperCase()
+            : "";
+
+      if (!name) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "name cannot be empty",
+            },
+          ],
+        });
+      }
+
+      if (!validTypes.includes(type)) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "Invalid GL account type",
+            },
+          ],
+        });
+      }
+
+      let organizationId: string | null = account.organizationId;
+
+      if (body.organizationId !== undefined) {
+        if (
+          body.organizationId !== null &&
+          typeof body.organizationId !== "string"
+        ) {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message: "organizationId must be a valid organization id or null",
+              },
+            ],
+          });
+        }
+
+        organizationId =
+          typeof body.organizationId === "string"
+            ? body.organizationId.trim() || null
+            : null;
+
+        if (organizationId) {
+          const organization = await prisma.organization.findFirst({
+            where: {
+              id: organizationId,
+              tenantId: claims.tenantId,
+              active: true,
+            },
+          });
+
+          if (!organization) {
+            return reply.code(400).send({
+              errors: [
+                {
+                  code: "VALIDATION_ERROR",
+                  message: "Organization does not exist or is inactive",
+                },
+              ],
+            });
+          }
+        }
+      }
+
+      let active = account.active;
+
+      if (body.active !== undefined) {
+        if (typeof body.active !== "boolean") {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message: "active must be a boolean",
+              },
+            ],
+          });
+        }
+
+        active = body.active;
+      }
+
+      const updated = await prisma.glAccount.update({
+        where: {
+          id: account.id,
+        },
+        data: {
+          name,
+          type: type as
+            | "ASSET"
+            | "LIABILITY"
+            | "EQUITY"
+            | "REVENUE"
+            | "EXPENSE",
+          organizationId,
+          active,
+        },
+        include: {
+          organization: true,
+        },
+      });
+
+      await writeAuditEvent(prisma, {
+        tenantId: claims.tenantId,
+        actorUserId: claims.sub,
+        action: "UPDATE",
+        entityType: "GlAccount",
+        entityId: updated.id,
+        previousState: account,
+        newState: updated,
+      });
+
+      return {
+        data: updated,
+      };
+    },
+  );
+
   // =========================================================
   // TRIAL BALANCE
   // =========================================================
