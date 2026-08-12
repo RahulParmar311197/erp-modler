@@ -539,6 +539,7 @@ export async function accountingRoutes(
       const query = request.query as {
         fromDate?: unknown;
         toDate?: unknown;
+        organizationId?: unknown;
       };
 
       const fromDate = parseReportDate(query.fromDate);
@@ -577,10 +578,49 @@ export async function accountingRoutes(
         });
       }
 
+      const organizationId =
+        typeof query.organizationId === "string" &&
+        query.organizationId.trim()
+          ? query.organizationId.trim()
+          : undefined;
+
+      if (query.organizationId !== undefined && !organizationId) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "organizationId must be a valid organization id",
+            },
+          ],
+        });
+      }
+
+      if (organizationId) {
+        const organization = await prisma.organization.findFirst({
+          where: {
+            id: organizationId,
+            tenantId: claims.tenantId,
+            active: true,
+          },
+        });
+
+        if (!organization) {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message: "Organization does not exist or is inactive",
+              },
+            ],
+          });
+        }
+      }
+
       const accounts = await prisma.glAccount.findMany({
         where: {
           tenantId: claims.tenantId,
           active: true,
+          ...(organizationId ? { organizationId } : {}),
         },
         orderBy: {
           code: "asc",
@@ -592,6 +632,7 @@ export async function accountingRoutes(
           tenantId: claims.tenantId,
           journalEntry: {
             status: "POSTED",
+            ...(organizationId ? { organizationId } : {}),
             ...(fromDate || toDate
               ? {
                   entryDate: {
@@ -689,6 +730,7 @@ export async function accountingRoutes(
       const query = request.query as {
         fromDate?: unknown;
         toDate?: unknown;
+        organizationId?: unknown;
       };
 
       const fromDate = parseReportDate(query.fromDate);
@@ -727,10 +769,49 @@ export async function accountingRoutes(
         });
       }
 
+      const organizationId =
+        typeof query.organizationId === "string" &&
+        query.organizationId.trim()
+          ? query.organizationId.trim()
+          : undefined;
+
+      if (query.organizationId !== undefined && !organizationId) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "organizationId must be a valid organization id",
+            },
+          ],
+        });
+      }
+
+      if (organizationId) {
+        const organization = await prisma.organization.findFirst({
+          where: {
+            id: organizationId,
+            tenantId: claims.tenantId,
+            active: true,
+          },
+        });
+
+        if (!organization) {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message: "Organization does not exist or is inactive",
+              },
+            ],
+          });
+        }
+      }
+
       const accounts = await prisma.glAccount.findMany({
         where: {
           tenantId: claims.tenantId,
           active: true,
+          ...(organizationId ? { organizationId } : {}),
           type: {
             in: ["REVENUE", "EXPENSE"],
           },
@@ -745,6 +826,7 @@ export async function accountingRoutes(
           tenantId: claims.tenantId,
           journalEntry: {
             status: "POSTED",
+            ...(organizationId ? { organizationId } : {}),
             ...(fromDate || toDate
               ? {
                   entryDate: {
@@ -859,6 +941,7 @@ export async function accountingRoutes(
 
       const query = request.query as {
         toDate?: string;
+        organizationId?: unknown;
       };
 
       const toDate = parseReportDate(query.toDate);
@@ -874,10 +957,49 @@ export async function accountingRoutes(
         });
       }
 
+      const organizationId =
+        typeof query.organizationId === "string" &&
+        query.organizationId.trim()
+          ? query.organizationId.trim()
+          : undefined;
+
+      if (query.organizationId !== undefined && !organizationId) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "organizationId must be a valid organization id",
+            },
+          ],
+        });
+      }
+
+      if (organizationId) {
+        const organization = await prisma.organization.findFirst({
+          where: {
+            id: organizationId,
+            tenantId: claims.tenantId,
+            active: true,
+          },
+        });
+
+        if (!organization) {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message: "Organization does not exist or is inactive",
+              },
+            ],
+          });
+        }
+      }
+
       const accounts = await prisma.glAccount.findMany({
         where: {
           tenantId: claims.tenantId,
           active: true,
+          ...(organizationId ? { organizationId } : {}),
           type: {
             in: ["ASSET", "LIABILITY", "EQUITY"],
           },
@@ -892,6 +1014,7 @@ export async function accountingRoutes(
           tenantId: claims.tenantId,
           journalEntry: {
             status: "POSTED",
+            ...(organizationId ? { organizationId } : {}),
             ...(toDate
               ? {
                   entryDate: {
