@@ -897,6 +897,30 @@ export async function accountsPayableRoutes(app: FastifyInstance) {
           },
         });
 
+        await postJournalEntry(tx, {
+          tenantId: claims.tenantId,
+          organizationId: bill.organizationId,
+          entryNumber: `AP-PAY-${paymentNumber}`,
+          entryDate: created.paymentDate,
+          description: `Vendor payment ${paymentNumber}`,
+          sourceType: "VendorPayment",
+          sourceId: created.id,
+          lines: [
+            {
+              accountCode: "2000",
+              description: `Accounts payable - ${paymentNumber}`,
+              debit: paymentAmount,
+              credit: 0,
+            },
+            {
+              accountCode: "1000",
+              description: `Cash / Bank - ${paymentNumber}`,
+              debit: 0,
+              credit: paymentAmount,
+            },
+          ],
+        });
+
         await tx.vendorBill.update({
           where: {
             id: bill.id,
