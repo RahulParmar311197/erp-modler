@@ -1,0 +1,395 @@
+import {
+  FastifyInstance,
+  FastifyReply,
+  FastifyRequest,
+} from "fastify";
+
+import {
+  authenticate,
+  requirePermission,
+  AuthClaims,
+} from "../../auth/authorization";
+
+import { writeAuditEvent } from "../../audit/audit";
+import { PrismaClient } from "../../../../../packages/database/generated/prisma/client";
+
+type JournalLineInput = {
+  accountId?: string;
+  debit?: number;
+  credit?: number;
+  description?: string;
+};
+
+export async function journalRoutes(
+  app: FastifyInstance,
+  prisma: PrismaClient,
+) {
+  app.get(
+    "/api/gl/journal-entries",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "user.view"),
+      ],
+    },
+    async (request) => {
+      const claims = request.user as AuthClaims;
+
+      const entries = await prisma.journalEntry.findMany({
+        where: {
+          tenantId: claims.tenantId,
+        },
+        orderBy: {
+          entryDate: "desc",
+        },
+        include: {
+          organization: true,
+          lines: {
+            include: {
+              account: true,
+            },
+          },
+        },
+      });
+
+      return { data: entries };
+    },
+  );
+
+  app.get(
+    "/api/gl/journal-entries/:id",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "user.view"),
+      ],
+    },
+    async (request, reply) => {
+      const claims = request.user as AuthClaims;
+      const { id } = request.params as { id: string };
+
+      const entry = await prisma.journalEntry.findFirst({
+        where: {
+          id,
+          tenantId: claims.tenantId,
+        },
+        include: {
+          organization: true,
+          lines: {
+            include: {
+              account: true,
+            },
+          },
+        },
+      });
+
+      if (!entry) {
+        return reply.code(404).send({
+          errors: [
+            {
+              code: "NOT_FOUND",
+              message: "Journal entry not found",
+            },
+          ],
+        });
+      }
+
+      return { data: entry };
+    },
+  );
+
+  app.post(
+    "/api/gl/journal-entries",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "user.create"),
+      ],
+    },
+    async (request, reply) => {
+      const claims = request.user as AuthClaims;
+
+      const body = request.body as {
+        entryNumber?: string;
+        entryDate?: string;
+        organizationId?: string;
+        description?: string;
+        sourceType?: string;
+        sourceId?: string;
+        lines?: JournalLineInput[];
+      };
+
+      const entryNumber = body.entryNumber?.trim();
+      const lines = body.lines ?? [];
+
+      if (!entryNumber || lines.length < 2) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message:
+                "entryNumber and at least two journal lines are required",
+            },
+          ],
+        });
+      }
+
+      let debitTotal = 0;
+      let creditTotal = 0;
+
+      for (const line of lines) {
+        const debit = Number(line.debit ?? 0);
+        const credit = Number(line.credit ?? 0);
+
+        if (!line.accountId) {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message: "Every journal line requires an accountId",
+              },
+            ],
+          });
+        }
+
+        if (
+          !Number.isFinite(debit) ||
+          !Number.isFinite(credit) ||
+          debit < 0 ||
+          credit < 0 ||
+          (debit > 0 && credit > 0) ||
+          (debit === 0 && credit === 0)
+        ) {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message:
+                  "Each journal line must contain either a positive debit or a positive credit",
+              },
+            ],
+          });
+        }
+
+        debitTotal += debit;
+        creditTotal += credit;
+      }
+
+      if (Math.abs(debitTotal - creditTotal) > 0.000001) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: `Journal is not balanced. Debits: ${debitTotal}, Credits: ${creditTotal}`,
+            },
+          ],
+        });
+      }
+
+      const existing = await prisma.journalEntry.findFirst({
+        where: {
+          tenantId: claims.tenantId,
+          entryNumber,
+        },
+      });
+
+      if (existing) {
+        return reply.code(409).send({
+          errors: [
+            {
+              code: "CONFLICT",
+              message: "Journal entry number already exists",
+            },
+          ],
+        });
+      }
+
+      const accountIds = [...new Set(lines.map((line) => line.accountId!))];
+
+      const accounts = await prisma.glAccount.findMany({
+        where: {
+          tenantId: claims.tenantId,
+          id: {
+            in: accountIds,
+          },
+          active: true,
+        },
+      });
+
+      if (accounts.length !== accountIds.length) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "One or more GL accounts do not exist or are inactive",
+            },
+          ],
+        });
+      }
+
+      const organizationId =
+        body.organizationId ?? accounts[0]?.organizationId;
+
+      if (!organizationId) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "organizationId is required",
+            },
+          ],
+        });
+      }
+
+      const entry = await prisma.journalEntry.create({
+        data: {
+          tenantId: claims.tenantId,
+          organizationId,
+          entryNumber,
+          entryDate: body.entryDate
+            ? new Date(body.entryDate)
+            : new Date(),
+          status: "DRAFT",
+          description: body.description?.trim() || null,
+          sourceType: body.sourceType?.trim() || null,
+          sourceId: body.sourceId?.trim() || null,
+          lines: {
+            create: lines.map((line) => ({
+              tenantId: claims.tenantId,
+              accountId: line.accountId!,
+              debit: line.debit ?? 0,
+              credit: line.credit ?? 0,
+              description: line.description?.trim() || null,
+            })),
+          },
+        },
+        include: {
+          organization: true,
+          lines: {
+            include: {
+              account: true,
+            },
+          },
+        },
+      });
+
+      await writeAuditEvent(prisma, {
+        tenantId: claims.tenantId,
+        actorUserId: claims.sub,
+        action: "CREATE",
+        entityType: "JournalEntry",
+        entityId: entry.id,
+        newState: entry,
+      });
+
+      return reply.code(201).send({
+        data: entry,
+      });
+    },
+  );
+
+  app.post(
+    "/api/gl/journal-entries/:id/post",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "user.create"),
+      ],
+    },
+    async (request, reply) => {
+      const claims = request.user as AuthClaims;
+      const { id } = request.params as { id: string };
+
+      const entry = await prisma.journalEntry.findFirst({
+        where: {
+          id,
+          tenantId: claims.tenantId,
+        },
+        include: {
+          lines: true,
+        },
+      });
+
+      if (!entry) {
+        return reply.code(404).send({
+          errors: [
+            {
+              code: "NOT_FOUND",
+              message: "Journal entry not found",
+            },
+          ],
+        });
+      }
+
+      if (entry.status !== "DRAFT") {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "Only DRAFT journal entries can be posted",
+            },
+          ],
+        });
+      }
+
+      const debitTotal = entry.lines.reduce(
+        (sum, line) => sum + Number(line.debit),
+        0,
+      );
+
+      const creditTotal = entry.lines.reduce(
+        (sum, line) => sum + Number(line.credit),
+        0,
+      );
+
+      if (
+        entry.lines.length < 2 ||
+        Math.abs(debitTotal - creditTotal) > 0.000001
+      ) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "Journal entry must be balanced before posting",
+            },
+          ],
+        });
+      }
+
+      const updated = await prisma.journalEntry.update({
+        where: {
+          id: entry.id,
+        },
+        data: {
+          status: "POSTED",
+        },
+        include: {
+          organization: true,
+          lines: {
+            include: {
+              account: true,
+            },
+          },
+        },
+      });
+
+      await writeAuditEvent(prisma, {
+        tenantId: claims.tenantId,
+        actorUserId: claims.sub,
+        action: "POST",
+        entityType: "JournalEntry",
+        entityId: updated.id,
+        previousState: entry,
+        newState: updated,
+      });
+
+      return {
+        data: updated,
+      };
+    },
+  );
+}

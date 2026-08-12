@@ -47,6 +47,8 @@ function App() {
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentNumber, setPaymentNumber] = useState("");
   const [arInvoices, setArInvoices] = useState<any[]>([]);
+  const [glAccounts, setGlAccounts] = useState<any[]>([]);
+  const [journalEntries, setJournalEntries] = useState<any[]>([]);
   const [arPaymentInvoice, setArPaymentInvoice] = useState<any | null>(null);
   const [arPaymentAmount, setArPaymentAmount] = useState("");
   const [arPaymentNumber, setArPaymentNumber] = useState("");
@@ -118,7 +120,30 @@ function App() {
     }
   }
 
-  async function loadReceivables(authToken: string) {
+  async function loadGl(authToken: string) {
+  const headers = {
+    Authorization: `Bearer ${authToken}`,
+  };
+
+  const [accountsResponse, journalResponse] = await Promise.all([
+    fetch(`${API}/api/gl/accounts`, { headers }),
+    fetch(`${API}/api/gl/journal-entries`, { headers }),
+  ]);
+
+  if (!accountsResponse.ok || !journalResponse.ok) {
+    throw new Error("Unable to load General Ledger");
+  }
+
+  const [accountsResult, journalResult] = await Promise.all([
+    accountsResponse.json(),
+    journalResponse.json(),
+  ]);
+
+  setGlAccounts(accountsResult.data ?? []);
+  setJournalEntries(journalResult.data ?? []);
+}
+
+async function loadReceivables(authToken: string) {
     const response = await fetch(`${API}/api/sales-invoices`, {
       headers: {
         Authorization: `Bearer ${authToken}`,
@@ -139,6 +164,7 @@ function App() {
         const authToken = await login();
         await loadData(authToken);
       await loadReceivables(authToken);
+      await loadGl(authToken);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unexpected error");
       } finally {
@@ -882,6 +908,123 @@ function App() {
           </form>
         </div>
       )}
+
+
+      <section className="panel gl-panel">
+        <div className="panel-header">
+          <div>
+            <h2>General Ledger</h2>
+            <p>Chart of accounts and journal activity</p>
+          </div>
+        </div>
+
+        <div className="gl-summary">
+          <div className="card">
+            <span>GL Accounts</span>
+            <strong>{glAccounts.length}</strong>
+          </div>
+
+          <div className="card">
+            <span>Journal Entries</span>
+            <strong>{journalEntries.length}</strong>
+          </div>
+
+          <div className="card">
+            <span>Posted Entries</span>
+            <strong>
+              {journalEntries.filter(
+                (entry) => entry.status === "POSTED",
+              ).length}
+            </strong>
+          </div>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Account</th>
+                <th>Type</th>
+                <th>Activity</th>
+              </tr>
+            </thead>
+            <tbody>
+              {glAccounts.map((account) => (
+                <tr key={account.id}>
+                  <td><strong>{account.code}</strong></td>
+                  <td>{account.name}</td>
+                  <td>{account.type}</td>
+                  <td>
+                    {journalEntries.reduce(
+                      (count, entry) =>
+                        count +
+                        (entry.lines?.filter(
+                          (line: any) =>
+                            line.accountId === account.id,
+                        ).length ?? 0),
+                      0,
+                    )}{" "}
+                    lines
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="panel-header">
+          <div>
+            <h2>Journal Entries</h2>
+            <p>Posted and draft accounting transactions</p>
+          </div>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Entry</th>
+                <th>Date</th>
+                <th>Description</th>
+                <th>Debit</th>
+                <th>Credit</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {journalEntries.map((entry) => {
+                const debit = (entry.lines ?? []).reduce(
+                  (sum: number, line: any) =>
+                    sum + Number(line.debit),
+                  0,
+                );
+
+                const credit = (entry.lines ?? []).reduce(
+                  (sum: number, line: any) =>
+                    sum + Number(line.credit),
+                  0,
+                );
+
+                return (
+                  <tr key={entry.id}>
+                    <td><strong>{entry.entryNumber}</strong></td>
+                    <td>
+                      {new Date(
+                        entry.entryDate,
+                      ).toLocaleDateString("en-IN")}
+                    </td>
+                    <td>{entry.description || "—"}</td>
+                    <td>₹{debit.toLocaleString("en-IN")}</td>
+                    <td>₹{credit.toLocaleString("en-IN")}</td>
+                    <td>{entry.status}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
     </main>
   );
