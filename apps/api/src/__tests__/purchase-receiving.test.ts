@@ -353,6 +353,96 @@ describe("Purchase receiving flow", () => {
     }
   });
 
+  it("allows only one concurrent supplier with the same code", async () => {
+    const app = await buildApp();
+
+    try {
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          tenantCode: "MODLER",
+          email: "admin@modler.local",
+          password: "ModlerAdmin@2026!",
+        },
+      });
+
+      expect(login.statusCode).toBe(200);
+
+      const headers = {
+        authorization: `Bearer ${login.json().data.token}`,
+      };
+
+      const tenant = await prisma.tenant.findUniqueOrThrow({
+        where: { code: "MODLER" },
+      });
+
+      const organization = await prisma.organization.findFirst({
+        where: {
+          tenantId: tenant.id,
+          active: true,
+        },
+      });
+
+      const suffix = Date.now();
+      const code = `SUP-CONCURRENT-DUP-${suffix}`;
+
+      const payload = {
+        code,
+        name: `Concurrent Supplier ${suffix}`,
+        organizationId: organization?.id,
+        email: `supplier-${suffix}@example.com`,
+        currency: "INR",
+      };
+
+      const [first, second] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: "/api/suppliers",
+          headers,
+          payload,
+        }),
+        app.inject({
+          method: "POST",
+          url: "/api/suppliers",
+          headers,
+          payload,
+        }),
+      ]);
+
+      const results = [first, second];
+
+      const successful = results.filter(
+        (result) => result.statusCode === 201,
+      );
+
+      const rejected = results.filter(
+        (result) => result.statusCode === 409,
+      );
+
+      expect(successful).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      expect(rejected[0].json().errors[0].code).toBe(
+        "CONFLICT",
+      );
+      expect(rejected[0].json().errors[0].message).toBe(
+        "Supplier code already exists",
+      );
+
+      const suppliers = await prisma.supplier.findMany({
+        where: {
+          tenantId: tenant.id,
+          code,
+        },
+      });
+
+      expect(suppliers).toHaveLength(1);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("allows only one concurrent receipt when both consume the final remaining quantity", async () => {
     const app = await buildApp();
 

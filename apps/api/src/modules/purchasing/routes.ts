@@ -151,27 +151,57 @@ export async function supplierRoutes(
         });
       }
 
-      const supplier =
-        await prisma.supplier.create({
-          data: {
-            tenantId: claims.tenantId,
-            organizationId:
-              body.organizationId ?? null,
-            code,
-            name,
-            email: body.email?.trim() || null,
-            phone: body.phone?.trim() || null,
-            taxNumber:
-              body.taxNumber?.trim() || null,
-            paymentTerms:
-              body.paymentTerms?.trim() || null,
-            currency:
-              body.currency?.trim() || "INR",
-          },
-          include: {
-            organization: true,
-          },
-        });
+      let supplier;
+
+      try {
+        supplier =
+          await prisma.supplier.create({
+            data: {
+              tenantId: claims.tenantId,
+              organizationId:
+                body.organizationId ?? null,
+              code,
+              name,
+              email: body.email?.trim() || null,
+              phone: body.phone?.trim() || null,
+              taxNumber:
+                body.taxNumber?.trim() || null,
+              paymentTerms:
+                body.paymentTerms?.trim() || null,
+              currency:
+                body.currency?.trim() || "INR",
+            },
+            include: {
+              organization: true,
+            },
+          });
+      } catch (error) {
+        /*
+         * The pre-check above is not sufficient for concurrent requests.
+         *
+         * The database unique constraint on (tenantId, code)
+         * is the final authority. If another request creates the supplier
+         * between our pre-check and create(), Prisma raises P2002.
+         */
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "P2002"
+        ) {
+          return reply.code(409).send({
+            errors: [
+              {
+                code: "CONFLICT",
+                message:
+                  "Supplier code already exists",
+              },
+            ],
+          });
+        }
+
+        throw error;
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,
