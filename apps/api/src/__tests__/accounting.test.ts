@@ -329,6 +329,123 @@ describe("Accounting GL workflows", () => {
     }
   });
 
+  it("allows only one concurrent posting of the same journal entry", async () => {
+    const app = await buildApp();
+
+    try {
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          tenantCode: "MODLER",
+          email: "admin@modler.local",
+          password: "ModlerAdmin@2026!",
+        },
+      });
+
+      expect(login.statusCode).toBe(200);
+
+      const headers = {
+        authorization: `Bearer ${login.json().data.token}`,
+      };
+
+      const tenant = await prisma.tenant.findUniqueOrThrow({
+        where: {
+          code: "MODLER",
+        },
+      });
+
+      const accounts = await prisma.glAccount.findMany({
+        where: {
+          tenantId: tenant.id,
+          code: {
+            in: ["1000", "4000"],
+          },
+          active: true,
+        },
+      });
+
+      const cash = accounts.find((account) => account.code === "1000");
+      const revenue = accounts.find((account) => account.code === "4000");
+
+      expect(cash).toBeDefined();
+      expect(revenue).toBeDefined();
+
+      const suffix = Date.now();
+
+      const create = await app.inject({
+        method: "POST",
+        url: "/api/gl/journal-entries",
+        headers,
+        payload: {
+          organizationId,
+          entryNumber: `JE-CONCURRENT-POST-${suffix}`,
+          entryDate: "2026-08-13",
+          description: `Concurrent posting test ${suffix}`,
+          sourceType: "ConcurrentPostingTest",
+          sourceId: `CONCURRENT-POST-${suffix}`,
+          lines: [
+            {
+              accountId: cash!.id,
+              debit: 200,
+              credit: 0,
+              description: "Concurrent posting cash",
+            },
+            {
+              accountId: revenue!.id,
+              debit: 0,
+              credit: 200,
+              description: "Concurrent posting revenue",
+            },
+          ],
+        },
+      });
+
+      expect(create.statusCode).toBe(201);
+
+      const created = create.json().data;
+
+      expect(created.status).toBe("DRAFT");
+
+      const [first, second] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: `/api/gl/journal-entries/${created.id}/post`,
+          headers,
+        }),
+        app.inject({
+          method: "POST",
+          url: `/api/gl/journal-entries/${created.id}/post`,
+          headers,
+        }),
+      ]);
+
+      const results = [first, second];
+
+      const successful = results.filter(
+        (result) => result.statusCode === 200,
+      );
+
+      const rejected = results.filter(
+        (result) => result.statusCode === 400,
+      );
+
+      expect(successful).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      const finalEntry =
+        await prisma.journalEntry.findUniqueOrThrow({
+          where: {
+            id: created.id,
+          },
+        });
+
+      expect(finalEntry.status).toBe("POSTED");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("rejects an unbalanced journal entry", async () => {
     const app = await buildApp();
 
