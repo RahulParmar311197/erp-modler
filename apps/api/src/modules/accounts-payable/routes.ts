@@ -872,9 +872,55 @@ export async function accountsPayableRoutes(app: FastifyInstance) {
       }
 
       const payment = await prisma.$transaction(async (tx) => {
-        const newPaidAmount = bill.paidAmount.plus(paymentAmount);
+        /*
+         * Atomically reserve this payment against the bill balance.
+         *
+         * The predicate is intentionally based on the requested payment:
+         *
+         *   paidAmount + paymentAmount <= totalAmount
+         *
+         * which is equivalent to:
+         *
+         *   paidAmount <= totalAmount - paymentAmount
+         *
+         * PostgreSQL serializes UPDATEs against the same VendorBill row.
+         * Therefore, if two payments race for the final balance, the first
+         * one updates the row and the second one re-evaluates this predicate
+         * against the newly committed paidAmount and affects zero rows.
+         */
+        const maximumPaidAmount = bill.totalAmount.minus(paymentAmount);
 
-        const newStatus = newPaidAmount.gte(bill.totalAmount)
+        const updatedBill = await tx.vendorBill.updateMany({
+          where: {
+            id: bill.id,
+            tenantId: claims.tenantId,
+            status: {
+              in: ["POSTED", "PARTIALLY_PAID"],
+            },
+            paidAmount: {
+              lte: maximumPaidAmount,
+            },
+          },
+          data: {
+            paidAmount: {
+              increment: paymentAmount,
+            },
+          },
+        });
+
+        if (updatedBill.count !== 1) {
+          return null;
+        }
+
+        const lockedBill = await tx.vendorBill.findUniqueOrThrow({
+          where: {
+            id: bill.id,
+          },
+        });
+
+        const newStatus = lockedBill.paidAmount.gte(
+          lockedBill.totalAmount,
+        )
           ? "PAID"
           : "PARTIALLY_PAID";
 
@@ -926,13 +972,24 @@ export async function accountsPayableRoutes(app: FastifyInstance) {
             id: bill.id,
           },
           data: {
-            paidAmount: newPaidAmount,
             status: newStatus,
           },
         });
 
         return created;
       });
+
+      if (!payment) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message:
+                "Payment amount cannot exceed outstanding vendor bill amount",
+            },
+          ],
+        });
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,

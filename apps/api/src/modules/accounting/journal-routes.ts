@@ -661,38 +661,71 @@ export async function journalRoutes(
 
       const reversalNumber = `${original.entryNumber}-REV-${Date.now()}`;
 
-      const reversal = await prisma.journalEntry.create({
-        data: {
-          tenantId: claims.tenantId,
-          organizationId: original.organizationId,
-          entryNumber: reversalNumber,
-          entryDate: original.entryDate,
-          description: `Reversal of ${original.entryNumber}`,
-          sourceType: "JournalEntryReversal",
-          sourceId: original.id,
-          status: "POSTED",
-          lines: {
-            create: original.lines.map((line) => ({
-              tenantId: claims.tenantId,
-              accountId: line.accountId,
-              debit: line.credit,
-              credit: line.debit,
-              description:
-                line.description
-                  ? `Reversal: ${line.description}`
-                  : `Reversal of ${original.entryNumber}`,
-            })),
-          },
-        },
-        include: {
-          organization: true,
-          lines: {
-            include: {
-              account: true,
+      let reversal;
+
+      try {
+        reversal = await prisma.journalEntry.create({
+          data: {
+            tenantId: claims.tenantId,
+            organizationId: original.organizationId,
+            entryNumber: reversalNumber,
+            entryDate: original.entryDate,
+            description: `Reversal of ${original.entryNumber}`,
+            sourceType: "JournalEntryReversal",
+            sourceId: original.id,
+            status: "POSTED",
+            lines: {
+              create: original.lines.map((line) => ({
+                tenantId: claims.tenantId,
+                accountId: line.accountId,
+                debit: line.credit,
+                credit: line.debit,
+                description:
+                  line.description
+                    ? `Reversal: ${line.description}`
+                    : `Reversal of ${original.entryNumber}`,
+              })),
             },
           },
-        },
-      });
+          include: {
+            organization: true,
+            lines: {
+              include: {
+                account: true,
+              },
+            },
+          },
+        });
+      } catch (error) {
+        /*
+         * The pre-check above is useful for the normal path, but it is
+         * intentionally not relied upon for concurrency safety.
+         *
+         * The database unique constraint on
+         * (tenantId, sourceType, sourceId) is the final authority.
+         *
+         * If another request creates the reversal between our findFirst()
+         * and create(), Prisma raises P2002. Convert that race into the
+         * same 409 response as the normal duplicate path.
+         */
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "P2002"
+        ) {
+          return reply.code(409).send({
+            errors: [
+              {
+                code: "CONFLICT",
+                message: "Journal entry has already been reversed",
+              },
+            ],
+          });
+        }
+
+        throw error;
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,

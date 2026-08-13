@@ -34,6 +34,44 @@ type LoginResponse = {
   };
 };
 
+interface ArInvoice {
+  id: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  totalAmount: number | string;
+  paidAmount: number | string;
+  status: string;
+  customer?: {
+    id?: string;
+    code?: string;
+    name: string;
+  } | null;
+}
+
+interface GlAccount {
+  id: string;
+  code: string;
+  name: string;
+  type: string;
+}
+
+interface JournalLine {
+  id?: string;
+  accountId: string;
+  debit: number | string;
+  credit: number | string;
+  description?: string | null;
+}
+
+interface JournalEntry {
+  id: string;
+  entryNumber: string;
+  entryDate: string;
+  description: string;
+  status: string;
+  lines?: JournalLine[];
+}
+
 function App() {
   const [token, setToken] = useState("");
   const [bills, setBills] = useState<Bill[]>([]);
@@ -46,10 +84,11 @@ function App() {
   const [paymentBill, setPaymentBill] = useState<Bill | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentNumber, setPaymentNumber] = useState("");
-  const [arInvoices, setArInvoices] = useState<any[]>([]);
-  const [glAccounts, setGlAccounts] = useState<any[]>([]);
-  const [journalEntries, setJournalEntries] = useState<any[]>([]);
-  const [arPaymentInvoice, setArPaymentInvoice] = useState<any | null>(null);
+  const [arInvoices, setArInvoices] = useState<ArInvoice[]>([]);
+  const [glAccounts, setGlAccounts] = useState<GlAccount[]>([]);
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
+  const [arPaymentInvoice, setArPaymentInvoice] =
+    useState<ArInvoice | null>(null);
   const [arPaymentAmount, setArPaymentAmount] = useState("");
   const [arPaymentNumber, setArPaymentNumber] = useState("");
 
@@ -159,20 +198,36 @@ async function loadReceivables(authToken: string) {
   }
 
   useEffect(() => {
+    let cancelled = false;
+
     async function initialize() {
       try {
         const authToken = await login();
         await loadData(authToken);
-      await loadReceivables(authToken);
-      await loadGl(authToken);
+        await loadReceivables(authToken);
+        await loadGl(authToken);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Unexpected error");
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Unexpected error",
+          );
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     }
 
     void initialize();
+
+    return () => {
+      cancelled = true;
+    };
+    // Initial application bootstrap intentionally runs once.
+    // loadData also reads form-selection state, so including it here
+    // would cause the bootstrap request to rerun unnecessarily.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function createBill(event: React.FormEvent) {
@@ -960,7 +1015,7 @@ async function loadReceivables(authToken: string) {
                       (count, entry) =>
                         count +
                         (entry.lines?.filter(
-                          (line: any) =>
+                          (line: JournalLine) =>
                             line.accountId === account.id,
                         ).length ?? 0),
                       0,
@@ -995,13 +1050,13 @@ async function loadReceivables(authToken: string) {
             <tbody>
               {journalEntries.map((entry) => {
                 const debit = (entry.lines ?? []).reduce(
-                  (sum: number, line: any) =>
+                  (sum: number, line: JournalLine) =>
                     sum + Number(line.debit),
                   0,
                 );
 
                 const credit = (entry.lines ?? []).reduce(
-                  (sum: number, line: any) =>
+                  (sum: number, line: JournalLine) =>
                     sum + Number(line.credit),
                   0,
                 );

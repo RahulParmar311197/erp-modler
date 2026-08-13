@@ -490,8 +490,8 @@ model JournalEntry {
   lines          JournalLine[]
 
   @@unique([tenantId, entryNumber])
+  @@unique([tenantId, sourceType, sourceId])
   @@index([tenantId, entryDate])
-  @@index([tenantId, sourceType, sourceId])
   @@index([tenantId, status])
 }
 
