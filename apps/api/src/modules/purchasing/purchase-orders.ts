@@ -361,37 +361,67 @@ export async function purchaseOrderRoutes(
       // CREATE PO
       // -------------------------------------------------------
 
-      const order =
-        await prisma.purchaseOrder.create({
-          data: {
-            tenantId: claims.tenantId,
-            organizationId:
-              body.organizationId,
-            supplierId: body.supplierId,
-            poNumber,
-            status: "DRAFT",
-            expectedDate: body.expectedDate
-              ? new Date(body.expectedDate)
-              : null,
-            currency:
-              body.currency?.trim() || "INR",
-            notes:
-              body.notes?.trim() || null,
-            lines: {
-              create: lineData,
-            },
-          },
-          include: {
-            supplier: true,
-            organization: true,
-            lines: {
-              include: {
-                item: true,
-                uom: true,
+      let order;
+
+      try {
+        order =
+          await prisma.purchaseOrder.create({
+            data: {
+              tenantId: claims.tenantId,
+              organizationId:
+                body.organizationId,
+              supplierId: body.supplierId,
+              poNumber,
+              status: "DRAFT",
+              expectedDate: body.expectedDate
+                ? new Date(body.expectedDate)
+                : null,
+              currency:
+                body.currency?.trim() || "INR",
+              notes:
+                body.notes?.trim() || null,
+              lines: {
+                create: lineData,
               },
             },
-          },
-        });
+            include: {
+              supplier: true,
+              organization: true,
+              lines: {
+                include: {
+                  item: true,
+                  uom: true,
+                },
+              },
+            },
+          });
+      } catch (error) {
+        /*
+         * The pre-check above is not sufficient for concurrent requests.
+         *
+         * The database unique constraint on (tenantId, poNumber)
+         * is the final authority. If another request creates the PO
+         * between our pre-check and create(), Prisma raises P2002.
+         */
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "P2002"
+        ) {
+          return reply.code(409).send({
+            errors: [
+              {
+                code: "CONFLICT",
+                message:
+                  "Purchase order number already exists",
+              },
+            ],
+          });
+        }
+
+        throw error;
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,

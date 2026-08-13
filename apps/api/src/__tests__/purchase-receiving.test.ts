@@ -239,6 +239,120 @@ describe("Purchase receiving flow", () => {
     }
   });
 
+  it("allows only one concurrent purchase order with the same PO number", async () => {
+    const app = await buildApp();
+
+    try {
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          tenantCode: "MODLER",
+          email: "admin@modler.local",
+          password: "ModlerAdmin@2026!",
+        },
+      });
+
+      expect(login.statusCode).toBe(200);
+
+      const headers = {
+        authorization: `Bearer ${login.json().data.token}`,
+      };
+
+      const organizationId =
+        "0acbfc53-94fe-457c-8e43-b048dc454a3d";
+
+      const tenant = await prisma.tenant.findUniqueOrThrow({
+        where: { code: "MODLER" },
+      });
+
+      const supplier = await prisma.supplier.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          active: true,
+        },
+      });
+
+      const item = await prisma.item.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          active: true,
+        },
+      });
+
+      const uom = await prisma.unitOfMeasure.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          active: true,
+        },
+      });
+
+      const suffix = Date.now();
+      const poNumber = `PO-CONCURRENT-DUP-${suffix}`;
+
+      const payload = {
+        poNumber,
+        organizationId,
+        supplierId: supplier.id,
+        currency: "INR",
+        lines: [
+          {
+            itemId: item.id,
+            uomId: uom.id,
+            quantity: 1,
+            unitPrice: 500,
+          },
+        ],
+      };
+
+      const [first, second] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: "/api/purchase-orders",
+          headers,
+          payload,
+        }),
+        app.inject({
+          method: "POST",
+          url: "/api/purchase-orders",
+          headers,
+          payload,
+        }),
+      ]);
+
+      const results = [first, second];
+
+      const successful = results.filter(
+        (result) => result.statusCode === 201,
+      );
+
+      const rejected = results.filter(
+        (result) => result.statusCode === 409,
+      );
+
+      expect(successful).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      expect(rejected[0].json().errors[0].code).toBe(
+        "CONFLICT",
+      );
+      expect(rejected[0].json().errors[0].message).toBe(
+        "Purchase order number already exists",
+      );
+
+      const orders = await prisma.purchaseOrder.findMany({
+        where: {
+          tenantId: tenant.id,
+          poNumber,
+        },
+      });
+
+      expect(orders).toHaveLength(1);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("allows only one concurrent receipt when both consume the final remaining quantity", async () => {
     const app = await buildApp();
 
