@@ -555,12 +555,31 @@ export async function journalRoutes(
         });
       }
 
-      const updated = await prisma.journalEntry.update({
+      const posted = await prisma.journalEntry.updateMany({
         where: {
           id: entry.id,
+          tenantId: claims.tenantId,
+          status: "DRAFT",
         },
         data: {
           status: "POSTED",
+        },
+      });
+
+      if (posted.count !== 1) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "Only DRAFT journal entries can be posted",
+            },
+          ],
+        });
+      }
+
+      const updated = await prisma.journalEntry.findUniqueOrThrow({
+        where: {
+          id: entry.id,
         },
         include: {
           organization: true,
