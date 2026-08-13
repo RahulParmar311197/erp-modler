@@ -3,6 +3,174 @@ import { buildApp } from "../app";
 import { prisma } from "../lib/prisma";
 
 describe("Stock concurrency", () => {
+  it("allows only one concurrent opening stock balance for the same location", async () => {
+    const app = await buildApp();
+
+    try {
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          tenantCode: "MODLER",
+          email: "admin@modler.local",
+          password: "ModlerAdmin@2026!",
+        },
+      });
+
+      expect(login.statusCode).toBe(200);
+
+      const headers = {
+        authorization: `Bearer ${login.json().data.token}`,
+      };
+
+      const tenant = await prisma.tenant.findUniqueOrThrow({
+        where: { code: "MODLER" },
+      });
+
+      /*
+       * Use a fresh test item so the test does not depend on whether
+       * every seeded warehouse/bin location already has a balance.
+       */
+      const suffix = `${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
+
+      const baseUom = await prisma.unitOfMeasure.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          active: true,
+        },
+      });
+
+      const item = await prisma.item.create({
+        data: {
+          tenantId: tenant.id,
+          sku: `TEST-OPENING-${suffix}`,
+          name: `Concurrent Opening Test ${suffix}`,
+          active: true,
+          baseUomId: baseUom.id,
+        },
+      });
+
+      const warehouse =
+        await prisma.warehouse.findFirstOrThrow({
+          where: {
+            tenantId: tenant.id,
+            active: true,
+          },
+          include: {
+            zones: {
+              where: {
+                active: true,
+              },
+              include: {
+                bins: {
+                  where: {
+                    active: true,
+                  },
+                  take: 1,
+                },
+              },
+              take: 1,
+            },
+          },
+        });
+
+      const zone = warehouse.zones[0];
+
+      if (!zone || !zone.bins[0]) {
+        throw new Error(
+          "Test requires at least one active warehouse bin",
+        );
+      }
+
+      const bin = zone.bins[0];
+
+      const payload = {
+        itemId: item.id,
+        warehouseId: warehouse.id,
+        binId: bin.id,
+        quantity: 25,
+        notes: `Concurrent opening stock ${suffix}`,
+      };
+
+      const [first, second] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: "/api/stock/opening",
+          headers,
+          payload,
+        }),
+        app.inject({
+          method: "POST",
+          url: "/api/stock/opening",
+          headers,
+          payload,
+        }),
+      ]);
+
+      const results = [first, second];
+
+      expect(
+        results.filter(
+          (result) => result.statusCode === 201,
+        ),
+      ).toHaveLength(1);
+
+      expect(
+        results.filter(
+          (result) => result.statusCode === 409,
+        ),
+      ).toHaveLength(1);
+
+      const conflict =
+        results.find(
+          (result) => result.statusCode === 409,
+        );
+
+      expect(conflict).toBeDefined();
+      expect(conflict!.json().errors[0].code).toBe(
+        "CONFLICT",
+      );
+
+      expect(conflict!.json().errors[0].message).toBe(
+        "Stock balance already exists for this item and location",
+      );
+
+      const balance =
+        await prisma.stockBalance.findUniqueOrThrow({
+          where: {
+            tenantId_itemId_warehouseId_binId: {
+              tenantId: tenant.id,
+              itemId: item.id,
+              warehouseId: warehouse.id,
+              binId: bin.id,
+            },
+          },
+        });
+
+      expect(Number(balance.quantity)).toBe(25);
+
+      const movements =
+        await prisma.stockMovement.findMany({
+          where: {
+            tenantId: tenant.id,
+            itemId: item.id,
+            warehouseId: warehouse.id,
+            binId: bin.id,
+            movementType: "OPENING",
+            referenceType: "OPENING_STOCK",
+          },
+        });
+
+      expect(movements).toHaveLength(1);
+      expect(Number(movements[0].quantity)).toBe(25);
+      expect(movements[0].referenceId).toBe(balance.id);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("applies concurrent stock adjustments without losing updates", async () => {
     const app = await buildApp();
 

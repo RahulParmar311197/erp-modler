@@ -203,39 +203,71 @@ export async function stockRoutes(
         });
       }
 
-      const result =
-        await prisma.$transaction(async (tx) => {
-          const balance =
-            await tx.stockBalance.create({
-              data: {
-                tenantId: claims.tenantId,
-                itemId: body.itemId!,
-                warehouseId: body.warehouseId!,
-                binId: body.binId,
-                quantity: body.quantity!,
-              },
-            });
+      let result;
 
-          const movement =
-            await tx.stockMovement.create({
-              data: {
-                tenantId: claims.tenantId,
-                itemId: body.itemId!,
-                warehouseId: body.warehouseId!,
-                binId: body.binId,
-                movementType: "OPENING",
-                quantity: body.quantity!,
-                referenceType: "OPENING_STOCK",
-                referenceId: balance.id,
-                notes: body.notes,
-              },
-            });
+      try {
+        result =
+          await prisma.$transaction(async (tx) => {
+            const balance =
+              await tx.stockBalance.create({
+                data: {
+                  tenantId: claims.tenantId,
+                  itemId: body.itemId!,
+                  warehouseId: body.warehouseId!,
+                  binId: body.binId,
+                  quantity: body.quantity!,
+                },
+              });
 
-          return {
-            balance,
-            movement,
-          };
-        });
+            const movement =
+              await tx.stockMovement.create({
+                data: {
+                  tenantId: claims.tenantId,
+                  itemId: body.itemId!,
+                  warehouseId: body.warehouseId!,
+                  binId: body.binId,
+                  movementType: "OPENING",
+                  quantity: body.quantity!,
+                  referenceType: "OPENING_STOCK",
+                  referenceId: balance.id,
+                  notes: body.notes,
+                },
+              });
+
+            return {
+              balance,
+              movement,
+            };
+          });
+      } catch (error) {
+        /*
+         * The pre-check above is not sufficient for concurrent requests.
+         *
+         * The database unique constraint on
+         * (tenantId, itemId, warehouseId, binId)
+         * is the final authority. If another request creates the same
+         * stock balance between our pre-check and create(), Prisma raises
+         * P2002.
+         */
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "P2002"
+        ) {
+          return reply.code(409).send({
+            errors: [
+              {
+                code: "CONFLICT",
+                message:
+                  "Stock balance already exists for this item and location",
+              },
+            ],
+          });
+        }
+
+        throw error;
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,
