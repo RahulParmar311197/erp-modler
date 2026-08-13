@@ -424,40 +424,85 @@ export async function shipmentRoutes(app: FastifyInstance, prisma: PrismaClient)
         const alreadyShipped =
           Number(lockedLine.shippedQty) - shipmentQty;
 
-        const balance =
-              await tx.stockBalance.findFirst({
-                where: {
-                  tenantId: claims.tenantId,
-                  itemId: orderLine.itemId,
-                  warehouseId: body.warehouseId!,
-                  binId: body.binId!,
-                },
-              });
+        /*
+         * Find the exact StockBalance row first, then lock it with
+         * SELECT ... FOR UPDATE. The lock is held until this transaction
+         * commits or rolls back, so concurrent shipments for the same
+         * inventory location are serialized and the second transaction
+         * sees the quantity left by the first transaction.
+         *
+         * binId is nullable, so Prisma's nullable equality handles both
+         * a specific bin and a NULL bin.
+         */
+        const stockBalance = await tx.stockBalance.findFirst({
+          where: {
+            tenantId: claims.tenantId,
+            itemId: orderLine.itemId,
+            warehouseId: body.warehouseId!,
+            binId: body.binId ?? null,
+          },
+          select: {
+            id: true,
+          },
+        });
 
-            if (!balance) {
-              throw new Error(
-                `No stock balance for item ${orderLine.item.sku}`,
-              );
-            }
+        if (!stockBalance) {
+          throw new Error(
+            `No stock balance for item ${orderLine.item.sku}`,
+          );
+        }
 
-            const available = Number(balance.quantity);
+        /*
+         * Lock the exact row.
+         *
+         * PostgreSQL holds this row lock until the transaction commits
+         * or rolls back. A concurrent shipment for the same StockBalance
+         * must therefore wait here.
+         */
+        const lockedStockRows = await tx.$queryRaw<
+          Array<{
+            id: string;
+            quantity: unknown;
+          }>
+        >`
+          SELECT
+            "id",
+            "quantity"
+          FROM "StockBalance"
+          WHERE "id" = ${stockBalance.id}
+          FOR UPDATE
+        `;
 
-            if (available < shipmentQty) {
-              throw new Error(
-                `Insufficient stock for ${orderLine.item.sku}. Available: ${available}, required: ${shipmentQty}`,
-              );
-            }
+        const lockedStock = lockedStockRows[0];
 
-            await tx.stockBalance.update({
-              where: {
-                id: balance.id,
-              },
-              data: {
-                quantity: available - shipmentQty,
-              },
-            });
+        if (!lockedStock) {
+          throw new Error(
+            `Stock balance disappeared for item ${orderLine.item.sku}`,
+          );
+        }
 
-            await tx.shipmentLine.create({
+        const available = Number(lockedStock.quantity);
+
+        if (available < shipmentQty) {
+          throw new Error(
+            `Insufficient stock for ${orderLine.item.sku}. Available: ${available}, required: ${shipmentQty}`,
+          );
+        }
+
+        /*
+         * The row is locked, so this update is serialized against
+         * concurrent shipments consuming the same StockBalance.
+         */
+        await tx.stockBalance.update({
+          where: {
+            id: lockedStock.id,
+          },
+          data: {
+            quantity: available - shipmentQty,
+          },
+        });
+
+        await tx.shipmentLine.create({
               data: {
                 tenantId: claims.tenantId,
                 shipmentId: shipment.id,
