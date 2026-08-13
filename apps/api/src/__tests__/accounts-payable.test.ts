@@ -505,6 +505,112 @@ describe("Accounts payable workflows", () => {
     }
   });
 
+  it("allows only one concurrent posting of the same vendor bill", async () => {
+    const app = await buildApp();
+
+    try {
+      const headers = await loginAndGetHeaders(app);
+
+      const tenant = await prisma.tenant.findUniqueOrThrow({
+        where: { code: "MODLER" },
+      });
+
+      const supplier = await prisma.supplier.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          active: true,
+        },
+      });
+
+      const item = await prisma.item.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          active: true,
+        },
+      });
+
+      const suffix = Date.now();
+
+      const create = await app.inject({
+        method: "POST",
+        url: "/api/vendor-bills",
+        headers,
+        payload: {
+          organizationId,
+          supplierId: supplier.id,
+          billNumber: `BILL-AP-CONCURRENT-POST-${suffix}`,
+          billDate: "2026-08-13",
+          currency: "INR",
+          lines: [
+            {
+              itemId: item.id,
+              description: "Concurrent vendor bill posting test",
+              quantity: 10,
+              unitPrice: 100,
+            },
+          ],
+        },
+      });
+
+      expect(create.statusCode).toBe(201);
+
+      const bill = create.json().data;
+
+      expect(bill.status).toBe("DRAFT");
+
+      const [first, second] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: `/api/vendor-bills/${bill.id}/post`,
+          headers,
+        }),
+        app.inject({
+          method: "POST",
+          url: `/api/vendor-bills/${bill.id}/post`,
+          headers,
+        }),
+      ]);
+
+      const results = [first, second];
+
+      const successful = results.filter(
+        (result) => result.statusCode === 200,
+      );
+
+      const rejected = results.filter(
+        (result) => result.statusCode === 400,
+      );
+
+      expect(successful).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      expect(rejected[0].json().errors[0].code).toBe(
+        "VALIDATION_ERROR",
+      );
+
+      const finalBill = await prisma.vendorBill.findUniqueOrThrow({
+        where: {
+          id: bill.id,
+        },
+      });
+
+      expect(finalBill.status).toBe("POSTED");
+
+      const journals = await prisma.journalEntry.findMany({
+        where: {
+          tenantId: tenant.id,
+          sourceType: "VendorBill",
+          sourceId: bill.id,
+        },
+      });
+
+      expect(journals).toHaveLength(1);
+      expect(journals[0].status).toBe("POSTED");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("rejects payments against a draft vendor bill", async () => {
     const app = await buildApp();
 

@@ -633,55 +633,87 @@ export async function accountsPayableRoutes(app: FastifyInstance) {
         });
       }
 
-      const updated = await prisma.$transaction(async (tx) => {
-        const posted = await tx.vendorBill.update({
-          where: {
-            id: bill.id,
-          },
-          data: {
-            status: "POSTED",
-          },
-          include: {
-            organization: true,
-            supplier: true,
-            purchaseOrder: true,
-            lines: {
-              include: {
-                item: true,
-                purchaseOrderLine: true,
-                goodsReceiptLine: true,
+      let updated;
+
+      try {
+        updated = await prisma.$transaction(async (tx) => {
+          const postedCount = await tx.vendorBill.updateMany({
+            where: {
+              id: bill.id,
+              tenantId: claims.tenantId,
+              status: "DRAFT",
+            },
+            data: {
+              status: "POSTED",
+            },
+          });
+
+          if (postedCount.count !== 1) {
+            throw new Error("VENDOR_BILL_ALREADY_POSTED");
+          }
+
+          const posted = await tx.vendorBill.findUniqueOrThrow({
+            where: {
+              id: bill.id,
+            },
+            include: {
+              organization: true,
+              supplier: true,
+              purchaseOrder: true,
+              lines: {
+                include: {
+                  item: true,
+                  purchaseOrderLine: true,
+                  goodsReceiptLine: true,
+                },
               },
+              payments: true,
             },
-            payments: true,
-          },
-        });
+          });
 
-        await postJournalEntry(tx, {
-          tenantId: claims.tenantId,
-          organizationId: bill.organizationId,
-          entryNumber: `AP-${bill.billNumber}`,
-          entryDate: bill.billDate,
-          description: `Vendor bill ${bill.billNumber}`,
-          sourceType: "VendorBill",
-          sourceId: bill.id,
-          lines: [
-            {
-              accountCode: "5000",
-              description: `Cost of goods - ${bill.billNumber}`,
-              debit: Number(bill.totalAmount),
-              credit: 0,
-            },
-            {
-              accountCode: "2000",
-              description: `Accounts payable - ${bill.billNumber}`,
-              debit: 0,
-              credit: Number(bill.totalAmount),
-            },
-          ],
-        });
+          await postJournalEntry(tx, {
+            tenantId: claims.tenantId,
+            organizationId: bill.organizationId,
+            entryNumber: `AP-${bill.billNumber}`,
+            entryDate: bill.billDate,
+            description: `Vendor bill ${bill.billNumber}`,
+            sourceType: "VendorBill",
+            sourceId: bill.id,
+            lines: [
+              {
+                accountCode: "5000",
+                description: `Cost of goods - ${bill.billNumber}`,
+                debit: Number(bill.totalAmount),
+                credit: 0,
+              },
+              {
+                accountCode: "2000",
+                description: `Accounts payable - ${bill.billNumber}`,
+                debit: 0,
+                credit: Number(bill.totalAmount),
+              },
+            ],
+          });
 
-        return posted;
-      });
+          return posted;
+        });
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "VENDOR_BILL_ALREADY_POSTED"
+        ) {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message: "Only draft vendor bills can be posted",
+              },
+            ],
+          });
+        }
+
+        throw error;
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,
