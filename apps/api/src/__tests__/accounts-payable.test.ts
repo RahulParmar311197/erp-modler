@@ -418,6 +418,93 @@ describe("Accounts payable workflows", () => {
     }
   });
 
+  it("allows only one concurrent vendor bill with the same bill number", async () => {
+    const app = await buildApp();
+
+    try {
+      const headers = await loginAndGetHeaders(app);
+
+      const tenant = await prisma.tenant.findUniqueOrThrow({
+        where: { code: "MODLER" },
+      });
+
+      const supplier = await prisma.supplier.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          active: true,
+        },
+      });
+
+      const item = await prisma.item.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          active: true,
+        },
+      });
+
+      const suffix = Date.now();
+      const billNumber = `BILL-AP-CONCURRENT-DUP-${suffix}`;
+
+      const payload = {
+        organizationId,
+        supplierId: supplier.id,
+        billNumber,
+        currency: "INR",
+        lines: [
+          {
+            itemId: item.id,
+            quantity: 1,
+            unitPrice: 500,
+          },
+        ],
+      };
+
+      const [first, second] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: "/api/vendor-bills",
+          headers,
+          payload,
+        }),
+        app.inject({
+          method: "POST",
+          url: "/api/vendor-bills",
+          headers,
+          payload,
+        }),
+      ]);
+
+      const results = [first, second];
+
+      const successful = results.filter(
+        (result) => result.statusCode === 201,
+      );
+
+      const rejected = results.filter(
+        (result) => result.statusCode === 409,
+      );
+
+      expect(successful).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      expect(rejected[0].json().errors[0].code).toBe("CONFLICT");
+      expect(rejected[0].json().errors[0].message).toBe(
+        "Vendor bill number already exists",
+      );
+
+      const bills = await prisma.vendorBill.findMany({
+        where: {
+          tenantId: tenant.id,
+          billNumber,
+        },
+      });
+
+      expect(bills).toHaveLength(1);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("rejects payments against a draft vendor bill", async () => {
     const app = await buildApp();
 

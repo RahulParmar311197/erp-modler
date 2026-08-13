@@ -471,44 +471,73 @@ export async function accountsPayableRoutes(app: FastifyInstance) {
       // CREATE
       // -------------------------------------------------------
 
-      const bill = await prisma.vendorBill.create({
-        data: {
-          tenantId: claims.tenantId,
-          organizationId: body.organizationId,
-          supplierId: body.supplierId,
-          purchaseOrderId: body.purchaseOrderId || null,
-          billNumber,
-          status: "DRAFT",
-          billDate: body.billDate
-            ? new Date(body.billDate)
-            : new Date(),
-          dueDate: body.dueDate
-            ? new Date(body.dueDate)
-            : null,
-          currency: body.currency?.trim() || "INR",
-          subtotal,
-          taxAmount,
-          totalAmount,
-          paidAmount: 0,
-          notes: body.notes?.trim() || null,
-          lines: {
-            create: lineData,
-          },
-        },
-        include: {
-          organization: true,
-          supplier: true,
-          purchaseOrder: true,
-          lines: {
-            include: {
-              item: true,
-              purchaseOrderLine: true,
-              goodsReceiptLine: true,
+      let bill;
+
+      try {
+        bill = await prisma.vendorBill.create({
+          data: {
+            tenantId: claims.tenantId,
+            organizationId: body.organizationId,
+            supplierId: body.supplierId,
+            purchaseOrderId: body.purchaseOrderId || null,
+            billNumber,
+            status: "DRAFT",
+            billDate: body.billDate
+              ? new Date(body.billDate)
+              : new Date(),
+            dueDate: body.dueDate
+              ? new Date(body.dueDate)
+              : null,
+            currency: body.currency?.trim() || "INR",
+            subtotal,
+            taxAmount,
+            totalAmount,
+            paidAmount: 0,
+            notes: body.notes?.trim() || null,
+            lines: {
+              create: lineData,
             },
           },
-          payments: true,
-        },
-      });
+          include: {
+            organization: true,
+            supplier: true,
+            purchaseOrder: true,
+            lines: {
+              include: {
+                item: true,
+                purchaseOrderLine: true,
+                goodsReceiptLine: true,
+              },
+            },
+            payments: true,
+          },
+        });
+      } catch (error) {
+        /*
+         * The pre-check above is useful for the normal path, but it is
+         * intentionally not relied upon for concurrency safety.
+         *
+         * The database unique constraint on (tenantId, billNumber) is the
+         * final authority when two requests race to create the same bill.
+         */
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "P2002"
+        ) {
+          return reply.code(409).send({
+            errors: [
+              {
+                code: "CONFLICT",
+                message: "Vendor bill number already exists",
+              },
+            ],
+          });
+        }
+
+        throw error;
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,
