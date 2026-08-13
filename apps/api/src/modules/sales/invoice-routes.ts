@@ -247,52 +247,81 @@ export async function salesInvoiceRoutes(app: FastifyInstance, prisma: PrismaCli
 
       const totalAmount = subtotal + taxAmount;
 
-      const invoice = await prisma.salesInvoice.create({
-        data: {
-          tenantId: claims.tenantId,
-          organizationId: order.organizationId,
-          customerId: order.customerId,
-          salesOrderId: order.id,
-          invoiceNumber,
-          status: "DRAFT",
-          invoiceDate: body.invoiceDate
-            ? new Date(body.invoiceDate)
-            : new Date(),
-          dueDate: body.dueDate
-            ? new Date(body.dueDate)
-            : null,
-          currency: order.currency,
-          subtotal,
-          taxAmount,
-          totalAmount,
-          paidAmount: 0,
-          notes: body.notes?.trim() || null,
-          lines: {
-            create: order.lines.map((line) => ({
-              tenantId: claims.tenantId,
-              salesOrderLineId: line.id,
-              itemId: line.itemId,
-              description: line.item.name,
-              quantity: line.quantity,
-              unitPrice: line.unitPrice,
-              lineTotal:
-                Number(line.quantity) *
-                Number(line.unitPrice),
-            })),
-          },
-        },
-        include: {
-          customer: true,
-          organization: true,
-          salesOrder: true,
-          lines: {
-            include: {
-              item: true,
-              salesOrderLine: true,
+      let invoice;
+
+      try {
+        invoice = await prisma.salesInvoice.create({
+          data: {
+            tenantId: claims.tenantId,
+            organizationId: order.organizationId,
+            customerId: order.customerId,
+            salesOrderId: order.id,
+            invoiceNumber,
+            status: "DRAFT",
+            invoiceDate: body.invoiceDate
+              ? new Date(body.invoiceDate)
+              : new Date(),
+            dueDate: body.dueDate
+              ? new Date(body.dueDate)
+              : null,
+            currency: order.currency,
+            subtotal,
+            taxAmount,
+            totalAmount,
+            paidAmount: 0,
+            notes: body.notes?.trim() || null,
+            lines: {
+              create: order.lines.map((line) => ({
+                tenantId: claims.tenantId,
+                salesOrderLineId: line.id,
+                itemId: line.itemId,
+                description: line.item.name,
+                quantity: line.quantity,
+                unitPrice: line.unitPrice,
+                lineTotal:
+                  Number(line.quantity) *
+                  Number(line.unitPrice),
+              })),
             },
           },
-        },
-      });
+          include: {
+            customer: true,
+            organization: true,
+            salesOrder: true,
+            lines: {
+              include: {
+                item: true,
+                salesOrderLine: true,
+              },
+            },
+          },
+        });
+      } catch (error) {
+        /*
+         * The pre-check above is not sufficient for concurrent requests.
+         *
+         * The database unique constraint on (tenantId, salesOrderId)
+         * is the final authority. If another request creates the invoice
+         * between our pre-check and create(), Prisma raises P2002.
+         */
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "P2002"
+        ) {
+          return reply.code(409).send({
+            errors: [
+              {
+                code: "CONFLICT",
+                message: "Sales order already has an invoice",
+              },
+            ],
+          });
+        }
+
+        throw error;
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,

@@ -728,6 +728,7 @@ model SalesInvoice {
   lines          SalesInvoiceLine[]
 
   @@unique([tenantId, invoiceNumber])
+  @@unique([tenantId, salesOrderId])
   @@index([tenantId, customerId])
   @@index([tenantId, salesOrderId])
   @@index([tenantId, status])
