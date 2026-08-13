@@ -385,6 +385,29 @@ export async function goodsReceiptRoutes(app: FastifyInstance) {
           });
         }
 
+        /*
+         * The pre-check above is not sufficient for concurrent requests.
+         *
+         * The database unique constraint on (tenantId, receiptNumber)
+         * is the final authority. If another request creates the receipt
+         * between our pre-check and create(), Prisma raises P2002.
+         */
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "P2002"
+        ) {
+          return reply.code(409).send({
+            errors: [
+              {
+                code: "CONFLICT",
+                message: "Receipt number already exists",
+              },
+            ],
+          });
+        }
+
         throw error;
       }
 

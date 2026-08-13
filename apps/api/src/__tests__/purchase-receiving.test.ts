@@ -443,6 +443,171 @@ describe("Purchase receiving flow", () => {
     }
   });
 
+  it("allows only one concurrent goods receipt with the same receipt number", async () => {
+    const app = await buildApp();
+
+    try {
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          tenantCode: "MODLER",
+          email: "admin@modler.local",
+          password: "ModlerAdmin@2026!",
+        },
+      });
+
+      expect(login.statusCode).toBe(200);
+
+      const headers = {
+        authorization: `Bearer ${login.json().data.token}`,
+      };
+
+      const organizationId =
+        "0acbfc53-94fe-457c-8e43-b048dc454a3d";
+
+      const tenant = await prisma.tenant.findUniqueOrThrow({
+        where: { code: "MODLER" },
+      });
+
+      const supplierId = (
+        await prisma.supplier.findFirstOrThrow({
+          where: {
+            tenantId: tenant.id,
+            active: true,
+          },
+        })
+      ).id;
+
+      const itemId = "09df66f2-e266-444a-b1d6-082798d776e2";
+      const uomId = "46e2c63b-95ad-4069-a946-b3ada5587b9c";
+      const warehouseId = "88c410b4-c183-443d-9d11-4cdf6b3e590c";
+      const binId = "b16caf8c-d84e-4ea1-8065-6864007a1e59";
+
+      const suffix = Date.now();
+
+      const create = await app.inject({
+        method: "POST",
+        url: "/api/purchase-orders",
+        headers,
+        payload: {
+          poNumber: `PO-GRN-CONCURRENT-DUP-${suffix}`,
+          organizationId,
+          supplierId,
+          currency: "INR",
+          lines: [
+            {
+              itemId,
+              uomId,
+              quantity: 10,
+              unitPrice: 100,
+            },
+          ],
+        },
+      });
+
+      expect(create.statusCode).toBe(201);
+
+      const order = create.json().data;
+      const purchaseOrderId = order.id;
+      const purchaseOrderLineId = order.lines[0].id;
+
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: `/api/purchase-orders/${purchaseOrderId}/submit`,
+            headers,
+            payload: {},
+          })
+        ).statusCode,
+      ).toBe(200);
+
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: `/api/purchase-orders/${purchaseOrderId}/approve`,
+            headers,
+            payload: {},
+          })
+        ).statusCode,
+      ).toBe(200);
+
+      const receiptNumber = `GRN-CONCURRENT-DUP-${suffix}`;
+
+      const payload = {
+        receiptNumber,
+        purchaseOrderId,
+        lines: [
+          {
+            purchaseOrderLineId,
+            warehouseId,
+            binId,
+            quantity: 1,
+          },
+        ],
+      };
+
+      const [first, second] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: "/api/goods-receipts",
+          headers,
+          payload,
+        }),
+        app.inject({
+          method: "POST",
+          url: "/api/goods-receipts",
+          headers,
+          payload,
+        }),
+      ]);
+
+      const results = [first, second];
+
+      const successful = results.filter(
+        (result) => result.statusCode === 201,
+      );
+
+      const rejected = results.filter(
+        (result) => result.statusCode === 409,
+      );
+
+      expect(successful).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      expect(rejected[0].json().errors[0].code).toBe(
+        "CONFLICT",
+      );
+      expect(rejected[0].json().errors[0].message).toBe(
+        "Receipt number already exists",
+      );
+
+      const receipts = await prisma.goodsReceipt.findMany({
+        where: {
+          tenantId: tenant.id,
+          receiptNumber,
+        },
+      });
+
+      expect(receipts).toHaveLength(1);
+
+      const finalOrder = await prisma.purchaseOrder.findUniqueOrThrow({
+        where: {
+          id: purchaseOrderId,
+        },
+        include: {
+          lines: true,
+        },
+      });
+
+      expect(finalOrder.lines[0].receivedQty.toString()).toBe("1");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("allows only one concurrent receipt when both consume the final remaining quantity", async () => {
     const app = await buildApp();
 
