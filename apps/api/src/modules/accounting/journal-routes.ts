@@ -41,6 +41,7 @@ export async function journalRoutes(
         toDate?: unknown;
         status?: unknown;
         sourceType?: unknown;
+        sourceId?: unknown;
         organizationId?: unknown;
         page?: unknown;
         pageSize?: unknown;
@@ -113,6 +114,11 @@ export async function journalRoutes(
           ? query.sourceType.trim()
           : undefined;
 
+      const sourceId =
+        typeof query.sourceId === "string" && query.sourceId.trim()
+          ? query.sourceId.trim()
+          : undefined;
+
       const organizationId =
         typeof query.organizationId === "string" &&
         query.organizationId.trim()
@@ -169,6 +175,7 @@ export async function journalRoutes(
             }
           : {}),
         ...(sourceType ? { sourceType } : {}),
+        ...(sourceId ? { sourceId } : {}),
         ...(organizationId ? { organizationId } : {}),
         ...(fromDate || toDate
           ? {
@@ -659,7 +666,7 @@ export async function journalRoutes(
           tenantId: claims.tenantId,
           organizationId: original.organizationId,
           entryNumber: reversalNumber,
-          entryDate: new Date(),
+          entryDate: original.entryDate,
           description: `Reversal of ${original.entryNumber}`,
           sourceType: "JournalEntryReversal",
           sourceId: original.id,
