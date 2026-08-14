@@ -363,15 +363,19 @@ function App() {
 
       {activeModule === "sales" && (
         <SalesPage
+          token={token}
           customers={customers}
           salesOrders={salesOrders}
+          onRefresh={() => loadData(token)}
         />
       )}
 
       {activeModule === "purchases" && (
         <PurchasesPage
+          token={token}
           suppliers={suppliers}
           purchaseOrders={purchaseOrders}
+          onRefresh={() => loadData(token)}
         />
       )}
 
