@@ -812,12 +812,31 @@ export async function journalRoutes(
         });
       }
 
-      const updated = await prisma.journalEntry.update({
+      const voided = await prisma.journalEntry.updateMany({
         where: {
           id: entry.id,
+          tenantId: claims.tenantId,
+          status: "POSTED",
         },
         data: {
           status: "VOID",
+        },
+      });
+
+      if (voided.count !== 1) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "Only POSTED journal entries can be voided",
+            },
+          ],
+        });
+      }
+
+      const updated = await prisma.journalEntry.findUniqueOrThrow({
+        where: {
+          id: entry.id,
         },
         include: {
           organization: true,
