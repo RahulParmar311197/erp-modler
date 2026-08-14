@@ -377,10 +377,12 @@ function App() {
 
       {activeModule === "inventory" && (
         <InventoryPage
+          token={token}
           items={items}
           warehouses={inventoryWarehouses}
           stockBalances={stockBalances}
           stockMovements={stockMovements}
+          onRefresh={refresh}
         />
       )}
 
