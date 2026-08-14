@@ -349,22 +349,7 @@ function App() {
       onNavigate={setActiveModule}
     >
       <main className="app">
-        <header className="topbar">
-          <div>
-            <div className="eyebrow">ERP MODLER</div>
-            <h1>Accounts Payable</h1>
-          </div>
-
-        <div className="top-actions">
-          <span className="connection">
-            <span className="dot" />
-            API Connected
-          </span>
-          <span className="user">System Administrator</span>
-        </div>
-      </header>
-
-      {error && <div className="error-banner">{error}</div>}
+        {error && <div className="error-banner">{error}</div>}
 
       {activeModule === "dashboard" && (
         <DashboardPage
