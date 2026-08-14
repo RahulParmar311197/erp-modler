@@ -252,6 +252,208 @@ describe("Sales flow", () => {
     }
   });
 
+  it("allows only one concurrent posting of the same sales invoice", async () => {
+    const app = await buildApp();
+
+    try {
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          tenantCode: "MODLER",
+          email: "admin@modler.local",
+          password: "ModlerAdmin@2026!",
+        },
+      });
+
+      expect(login.statusCode).toBe(200);
+
+      const headers = {
+        authorization: `Bearer ${login.json().data.token}`,
+      };
+
+      const tenant = await prisma.tenant.findUniqueOrThrow({
+        where: { code: "MODLER" },
+      });
+
+      const customer = await prisma.customer.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          active: true,
+        },
+      });
+
+      const item = await prisma.item.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          active: true,
+        },
+      });
+
+      const organizationId =
+        "0acbfc53-94fe-457c-8e43-b048dc454a3d";
+      const uomId =
+        "46e2c63b-95ad-4069-a946-b3ada5587b9c";
+      const itemId = item.id;
+      const suffix = Date.now();
+
+      const warehouseId =
+        "88c410b4-c183-443d-9d11-4cdf6b3e590c";
+      const binId =
+        "b16caf8c-d84e-4ea1-8065-6864007a1e59";
+
+      // Prepare exactly one unit of stock for the invoice-posting concurrency test.
+      const stockAdjustment = await app.inject({
+        method: "POST",
+        url: "/api/stock/adjustment",
+        headers,
+        payload: {
+          itemId,
+          warehouseId,
+          binId,
+          quantity: 1,
+          notes: `Prepare invoice posting concurrency test stock ${suffix}`,
+        },
+      });
+
+      expect(stockAdjustment.statusCode).toBe(200);
+
+      const create = await app.inject({
+        method: "POST",
+        url: "/api/sales-orders",
+        headers,
+        payload: {
+          orderNumber: `SO-INVOICE-POST-CONCURRENT-${suffix}`,
+          organizationId,
+          customerId: customer.id,
+          requestedDate: "2026-08-15",
+          currency: "INR",
+          lines: [
+            {
+              itemId: item.id,
+              uomId,
+              quantity: 1,
+              unitPrice: 150,
+            },
+          ],
+        },
+      });
+
+      expect(create.statusCode).toBe(201);
+
+      const order = create.json().data;
+
+      const submit = await app.inject({
+        method: "POST",
+        url: `/api/sales-orders/${order.id}/submit`,
+        headers,
+        payload: {},
+      });
+
+      expect(submit.statusCode).toBe(200);
+
+      const approve = await app.inject({
+        method: "POST",
+        url: `/api/sales-orders/${order.id}/approve`,
+        headers,
+        payload: {},
+      });
+
+      expect(approve.statusCode).toBe(200);
+
+      const ship = await app.inject({
+        method: "POST",
+        url: `/api/sales-orders/${order.id}/ship`,
+        headers,
+        payload: {
+          shipmentNumber: `SHIP-POST-CONCURRENT-${suffix}`,
+          warehouseId,
+          binId,
+          notes: "Prepare invoice posting concurrency test",
+          lines: [
+            {
+              salesOrderLineId: order.lines[0].id,
+              quantity: 1,
+            },
+          ],
+        },
+      });
+
+      if (ship.statusCode !== 201) {
+        console.error("SHIP FAILURE:", JSON.stringify(ship.json(), null, 2));
+      }
+
+      expect(ship.statusCode).toBe(201);
+      expect(ship.json().data.status).toBe("POSTED");
+
+      const invoiceCreate = await app.inject({
+        method: "POST",
+        url: `/api/sales-orders/${order.id}/invoice`,
+        headers,
+        payload: {
+          invoiceNumber: `INV-POST-CONCURRENT-${suffix}`,
+          invoiceDate: "2026-08-14",
+          dueDate: "2026-08-30",
+          taxAmount: 0,
+        },
+      });
+
+      expect(invoiceCreate.statusCode).toBe(201);
+
+      const invoice = invoiceCreate.json().data;
+
+      const [first, second] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: `/api/sales-invoices/${invoice.id}/post`,
+          headers,
+          payload: {},
+        }),
+        app.inject({
+          method: "POST",
+          url: `/api/sales-invoices/${invoice.id}/post`,
+          headers,
+          payload: {},
+        }),
+      ]);
+
+      const results = [first, second];
+
+      const successful = results.filter(
+        (result) => result.statusCode === 200,
+      );
+
+      const rejected = results.filter(
+        (result) => result.statusCode === 409,
+      );
+
+      expect(successful).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      const finalInvoice =
+        await prisma.salesInvoice.findUniqueOrThrow({
+          where: {
+            id: invoice.id,
+          },
+        });
+
+      expect(finalInvoice.status).toBe("POSTED");
+
+      const journals = await prisma.journalEntry.findMany({
+        where: {
+          tenantId: tenant.id,
+          sourceType: "SalesInvoice",
+          sourceId: invoice.id,
+        },
+      });
+
+      expect(journals).toHaveLength(1);
+      expect(journals[0].status).toBe("POSTED");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("serializes concurrent payments against the same invoice", async () => {
   const app = await buildApp();
 
@@ -1544,6 +1746,7 @@ it("rejects shipping more than the ordered quantity", async () => {
         "09df66f2-e266-444a-b1d6-082798d776e2";
       const uomId =
         "46e2c63b-95ad-4069-a946-b3ada5587b9c";
+
       const warehouseId =
         "88c410b4-c183-443d-9d11-4cdf6b3e590c";
       const binId =

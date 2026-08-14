@@ -484,12 +484,31 @@ export async function salesOrderRoutes(app: FastifyInstance, prisma: PrismaClien
         });
       }
 
-      const updated = await prisma.salesOrder.update({
+      const submitted = await prisma.salesOrder.updateMany({
         where: {
           id: order.id,
+          tenantId: claims.tenantId,
+          status: "DRAFT",
         },
         data: {
           status: "SUBMITTED",
+        },
+      });
+
+      if (submitted.count !== 1) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "Only DRAFT sales orders can be submitted",
+            },
+          ],
+        });
+      }
+
+      const updated = await prisma.salesOrder.findUniqueOrThrow({
+        where: {
+          id: order.id,
         },
         include: {
           customer: true,
@@ -559,12 +578,31 @@ export async function salesOrderRoutes(app: FastifyInstance, prisma: PrismaClien
         });
       }
 
-      const updated = await prisma.salesOrder.update({
+      const approved = await prisma.salesOrder.updateMany({
         where: {
           id: order.id,
+          tenantId: claims.tenantId,
+          status: "SUBMITTED",
         },
         data: {
           status: "APPROVED",
+        },
+      });
+
+      if (approved.count !== 1) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "Only SUBMITTED sales orders can be approved",
+            },
+          ],
+        });
+      }
+
+      const updated = await prisma.salesOrder.findUniqueOrThrow({
+        where: {
+          id: order.id,
         },
         include: {
           customer: true,

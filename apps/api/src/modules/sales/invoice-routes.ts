@@ -384,58 +384,90 @@ export async function salesInvoiceRoutes(app: FastifyInstance, prisma: PrismaCli
         });
       }
 
-      const updated = await prisma.$transaction(async (tx) => {
-        const postedInvoice = await tx.salesInvoice.update({
-          where: {
-            id: invoice.id,
-          },
-          data: {
-            status: "POSTED",
-          },
-        });
+      let updated;
 
-        await postJournalEntry(tx, {
-          tenantId: claims.tenantId,
-          organizationId: invoice.organizationId,
-          entryNumber: `AR-${invoice.invoiceNumber}`,
-          entryDate: invoice.invoiceDate,
-          description: `Sales invoice ${invoice.invoiceNumber}`,
-          sourceType: "SalesInvoice",
-          sourceId: invoice.id,
-          lines: [
-            {
-              accountCode: "1100",
-              description: "Accounts receivable",
-              debit: Number(invoice.totalAmount),
-              credit: 0,
+      try {
+        updated = await prisma.$transaction(async (tx) => {
+          const postedCount = await tx.salesInvoice.updateMany({
+            where: {
+              id: invoice.id,
+              tenantId: claims.tenantId,
+              status: "DRAFT",
             },
-            {
-              accountCode: "4000",
-              description: "Sales revenue",
-              debit: 0,
-              credit: Number(invoice.totalAmount),
+            data: {
+              status: "POSTED",
             },
-          ],
-        });
+          });
 
-        return tx.salesInvoice.findUniqueOrThrow({
-          where: {
-            id: postedInvoice.id,
-          },
-          include: {
-            customer: true,
-            organization: true,
-            salesOrder: true,
-            lines: {
-              include: {
-                item: true,
-                salesOrderLine: true,
+          if (postedCount.count !== 1) {
+            throw new Error("SALES_INVOICE_ALREADY_POSTED");
+          }
+
+          const postedInvoice = await tx.salesInvoice.findUniqueOrThrow({
+            where: {
+              id: invoice.id,
+            },
+          });
+
+          await postJournalEntry(tx, {
+            tenantId: claims.tenantId,
+            organizationId: invoice.organizationId,
+            entryNumber: `AR-${invoice.invoiceNumber}`,
+            entryDate: invoice.invoiceDate,
+            description: `Sales invoice ${invoice.invoiceNumber}`,
+            sourceType: "SalesInvoice",
+            sourceId: invoice.id,
+            lines: [
+              {
+                accountCode: "1100",
+                description: "Accounts receivable",
+                debit: Number(invoice.totalAmount),
+                credit: 0,
               },
+              {
+                accountCode: "4000",
+                description: "Sales revenue",
+                debit: 0,
+                credit: Number(invoice.totalAmount),
+              },
+            ],
+          });
+
+          return tx.salesInvoice.findUniqueOrThrow({
+            where: {
+              id: postedInvoice.id,
             },
-            payments: true,
-          },
+            include: {
+              customer: true,
+              organization: true,
+              salesOrder: true,
+              lines: {
+                include: {
+                  item: true,
+                  salesOrderLine: true,
+                },
+              },
+              payments: true,
+            },
+          });
         });
-      });
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "SALES_INVOICE_ALREADY_POSTED"
+        ) {
+          return reply.code(409).send({
+            errors: [
+              {
+                code: "CONFLICT",
+                message: "Sales invoice has already been posted",
+              },
+            ],
+          });
+        }
+
+        throw error;
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,
