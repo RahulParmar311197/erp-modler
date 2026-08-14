@@ -74,6 +74,13 @@ export function AdministrationPage({
   const [editingRoleName, setEditingRoleName] = useState("");
 
   const [permissionRoleId, setPermissionRoleId] = useState("");
+  const [permissionRoleName, setPermissionRoleName] = useState("");
+  const [permissions, setPermissions] = useState<
+    { id: string; code: string; description?: string | null }[]
+  >([]);
+  const [selectedPermissionIds, setSelectedPermissionIds] = useState<
+    string[]
+  >([]);
 
   async function loadAdministration() {
     if (!token) return;
@@ -368,6 +375,9 @@ export function AdministrationPage({
 
   async function openPermissions(role: Role) {
     setError("");
+    setPermissionRoleId("");
+    setPermissions([]);
+    setSelectedPermissionIds([]);
 
     try {
       const response = await fetch(
@@ -387,6 +397,22 @@ export function AdministrationPage({
         );
       }
 
+      const roleData = result.data;
+
+      const rolePermissions =
+        (roleData?.permissions ?? []) as {
+          id: string;
+          code: string;
+          description?: string | null;
+        }[];
+
+      setPermissionRoleName(
+        roleData?.name ?? role.name,
+      );
+      setPermissions(rolePermissions);
+      setSelectedPermissionIds(
+        rolePermissions.map((permission) => permission.id),
+      );
       setPermissionRoleId(role.id);
     } catch (err) {
       setError(
@@ -394,6 +420,59 @@ export function AdministrationPage({
           ? err.message
           : "Unable to load role permissions",
       );
+    }
+  }
+
+  function togglePermission(permissionId: string) {
+    setSelectedPermissionIds((current) =>
+      current.includes(permissionId)
+        ? current.filter((id) => id !== permissionId)
+        : [...current, permissionId],
+    );
+  }
+
+  async function savePermissions() {
+    if (!permissionRoleId) return;
+
+    setSaving(true);
+    setError("");
+
+    try {
+      const response = await fetch(
+        `${API}/api/roles/${permissionRoleId}/permissions`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            permissionIds: selectedPermissionIds,
+          }),
+        },
+      );
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          apiError(result, "Unable to save permissions"),
+        );
+      }
+
+      setPermissionRoleId("");
+      setPermissionRoleName("");
+      setPermissions([]);
+      setSelectedPermissionIds([]);
+      await loadAdministration();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to save permissions",
+      );
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -831,28 +910,71 @@ export function AdministrationPage({
               <div className="eyebrow">ACCESS CONTROL</div>
               <h2>Role Permissions</h2>
               <p>
-                Permission editing requires permission IDs from the
-                role detail API.
+                Configure permissions for {permissionRoleName}.
               </p>
             </div>
 
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => {
-                setPermissionRoleId("");
-              }}
-            >
-              Close
-            </button>
+            <div className="button-row">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  setPermissionRoleId("");
+                  setPermissionRoleName("");
+                  setPermissions([]);
+                  setSelectedPermissionIds([]);
+                }}
+                disabled={saving}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void savePermissions()}
+                disabled={saving}
+              >
+                {saving ? "Saving..." : "Save Permissions"}
+              </button>
+            </div>
           </div>
 
-          <div className="empty">
-            The API exposes permission IDs through
-            <code> GET /api/roles/:id</code>, but there is no dedicated
-            permission-list endpoint in the supplied API. We will wire
-            the selectable permission catalog once that endpoint is
-            available.
+          {permissions.length === 0 ? (
+            <div className="empty">
+              No permissions are currently assigned to this role.
+            </div>
+          ) : (
+            <div className="permission-grid">
+              {permissions.map((permission) => (
+                <label
+                  key={permission.id}
+                  className="permission-option"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedPermissionIds.includes(
+                      permission.id,
+                    )}
+                    onChange={() =>
+                      togglePermission(permission.id)
+                    }
+                  />
+
+                  <span>
+                    <strong>{permission.code}</strong>
+                    {permission.description && (
+                      <small>{permission.description}</small>
+                    )}
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          <div className="permission-summary">
+            {selectedPermissionIds.length} permission
+            {selectedPermissionIds.length === 1 ? "" : "s"} selected
           </div>
         </section>
       )}
