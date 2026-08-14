@@ -247,7 +247,7 @@ export async function goodsReceiptRoutes(app: FastifyInstance) {
             receiptDate: body.receiptDate
               ? new Date(body.receiptDate)
               : new Date(),
-            notes: body.notes?.trim() || null,
+            notes: `PO ${po.id}${body.notes?.trim() ? ` - ${body.notes.trim()}` : ""}`,
             lines: {
               create: body.lines!.map((line) => {
                 const poLine = po.lines.find(
@@ -317,7 +317,7 @@ export async function goodsReceiptRoutes(app: FastifyInstance) {
               quantity,
               referenceType: "GOODS_RECEIPT",
               referenceId: created.id,
-              notes: body.notes?.trim() || null,
+              notes: `PO ${po.id}${body.notes?.trim() ? ` - ${body.notes.trim()}` : ""}`,
             },
           });
 

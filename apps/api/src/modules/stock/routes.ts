@@ -195,7 +195,7 @@ export async function stockRoutes(
         return reply.code(409).send({
           errors: [
             {
-              code: "DUPLICATE_ERROR",
+              code: "CONFLICT",
               message:
                 "Stock balance already exists for this item and location",
             },

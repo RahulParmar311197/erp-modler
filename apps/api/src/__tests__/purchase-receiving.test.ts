@@ -139,6 +139,7 @@ describe("Purchase receiving flow", () => {
       expect(firstReceipt.statusCode).toBe(201);
 
       const firstData = firstReceipt.json().data;
+      const firstReceiptId = firstData.id;
 
       expect(firstData.lines[0].quantity).toBe("8");
 
@@ -193,6 +194,8 @@ describe("Purchase receiving flow", () => {
 
       expect(secondReceipt.statusCode).toBe(201);
 
+      const secondReceiptId = secondReceipt.json().data.id;
+
       // 7. Verify fully received state.
       const finalOrder = await prisma.purchaseOrder.findUniqueOrThrow({
         where: {
@@ -233,7 +236,36 @@ describe("Purchase receiving flow", () => {
         },
       });
 
-      expect(movements.filter((movement) => movement.referenceId === order.id)).toHaveLength(0);
+      expect(
+        movements.filter(
+          (movement) => movement.referenceId === firstReceiptId,
+        ),
+      ).toHaveLength(1);
+
+      expect(
+        movements.filter(
+          (movement) => movement.referenceId === secondReceiptId,
+        ),
+      ).toHaveLength(1);
+
+      const purchaseOrderMovements = movements.filter(
+        (movement) =>
+          movement.notes?.includes(`PO ${order.id}`),
+      );
+
+      expect(purchaseOrderMovements).toHaveLength(2);
+
+      expect(
+        purchaseOrderMovements.filter(
+          (movement) => movement.referenceId === firstReceiptId,
+        ),
+      ).toHaveLength(1);
+
+      expect(
+        purchaseOrderMovements.filter(
+          (movement) => movement.referenceId === secondReceiptId,
+        ),
+      ).toHaveLength(1);
     } finally {
       await app.close();
     }

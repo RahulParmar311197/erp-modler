@@ -546,8 +546,11 @@ export function PurchasesPage({
             <tbody>
               {purchaseOrders.map((order) => {
                 const canReceive =
-                  order.status === "APPROVED" ||
-                  order.status === "PARTIALLY_RECEIVED";
+                  (order.status === "APPROVED" ||
+                    order.status === "PARTIALLY_RECEIVED") &&
+                  (order.lines ?? []).some(
+                    (line) => remainingQuantity(line) > 0,
+                  );
 
                 return (
                   <tr key={order.id}>

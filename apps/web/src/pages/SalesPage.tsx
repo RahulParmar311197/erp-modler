@@ -83,6 +83,8 @@ export function SalesPage({
 }: SalesPageProps) {
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const [shipmentNumber, setShipmentNumber] = useState("");
+  const [invoiceOrderId, setInvoiceOrderId] = useState("");
+  const [invoiceNumber, setInvoiceNumber] = useState("");
   const [warehouseId, setWarehouseId] = useState("");
   const [binId, setBinId] = useState("");
   const [notes, setNotes] = useState("");
@@ -225,6 +227,68 @@ export function SalesPage({
       ...current,
       [lineId]: value,
     }));
+  }
+
+  async function createInvoice(order: SalesOrder) {
+    setError("");
+
+    if (!token) {
+      setError("Authentication token is missing.");
+      return;
+    }
+
+    if (order.status !== "SHIPPED") {
+      setError("Only shipped sales orders can be invoiced.");
+      return;
+    }
+
+    const number = invoiceNumber.trim();
+
+    if (!number) {
+      setError("Invoice number is required.");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const response = await fetch(
+        `${API}/api/sales-orders/${order.id}/invoice`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            invoiceNumber: number,
+            invoiceDate: new Date().toISOString().slice(0, 10),
+            notes: "Created from Sales",
+          }),
+        },
+      );
+
+      const result = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          result?.errors?.[0]?.message ??
+            "Unable to create sales invoice",
+        );
+      }
+
+      setInvoiceOrderId("");
+      setInvoiceNumber("");
+      await onRefresh();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to create sales invoice",
+      );
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function createShipment(event: React.FormEvent) {
@@ -544,8 +608,11 @@ export function SalesPage({
             <tbody>
               {salesOrders.map((order) => {
                 const canShip =
-                  order.status === "APPROVED" ||
-                  order.status === "PARTIALLY_SHIPPED";
+                  (order.status === "APPROVED" ||
+                    order.status === "PARTIALLY_SHIPPED") &&
+                  (order.lines ?? []).some(
+                    (line) => remainingQuantity(line) > 0,
+                  );
 
                 return (
                   <tr key={order.id}>
@@ -585,6 +652,67 @@ export function SalesPage({
                         >
                           Ship
                         </button>
+                      ) : order.status === "SHIPPED" ? (
+                        invoiceOrderId === order.id ? (
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: "6px",
+                              alignItems: "center",
+                            }}
+                          >
+                            <input
+                              value={invoiceNumber}
+                              onChange={(event) =>
+                                setInvoiceNumber(event.target.value)
+                              }
+                              placeholder="INV-001"
+                              style={{ minWidth: "130px" }}
+                              disabled={saving}
+                            />
+
+                            <button
+                              type="button"
+                              className="primary-button"
+                              onClick={() =>
+                                void createInvoice(order)
+                              }
+                              disabled={saving}
+                            >
+                              {saving ? "Creating..." : "Create"}
+                            </button>
+
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              onClick={() => {
+                                setInvoiceOrderId("");
+                                setInvoiceNumber("");
+                                setError("");
+                              }}
+                              disabled={saving}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => {
+                              setInvoiceOrderId(order.id);
+                              setInvoiceNumber(
+                                `INV-${new Date()
+                                  .toISOString()
+                                  .slice(0, 10)
+                                  .replaceAll("-", "")}-${order.orderNumber}`,
+                              );
+                              setError("");
+                            }}
+                          >
+                            Invoice
+                          </button>
+                        )
                       ) : (
                         "—"
                       )}
