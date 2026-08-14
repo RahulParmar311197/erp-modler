@@ -834,3 +834,44 @@ td small {
 .checkbox-label input {
   width: auto;
 }
+
+.operations-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  padding: 22px;
+}
+
+.operations-grid .card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.operations-grid .card strong {
+  font-size: 20px;
+}
+
+.operations-grid .card p {
+  margin: 0 0 8px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.form-section-heading {
+  grid-column: 1 / -1;
+  padding-bottom: 4px;
+}
+
+.form-section-heading h3 {
+  margin: 4px 0 0;
+  font-size: 18px;
+}
+
+@media (max-width: 1000px) {
+  .operations-grid {
+    grid-template-columns: 1fr;
+  }
+}

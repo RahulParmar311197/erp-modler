@@ -79,7 +79,7 @@ export function InventoryPage({
   stockMovements,
   onRefresh,
 }: InventoryPageProps) {
-  const [activeTab, setActiveTab] = useState<"items" | "stock" | "storage">("items");
+  const [activeTab, setActiveTab] = useState<"items" | "stock" | "storage" | "operations">("items");
   const [showItemForm, setShowItemForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadingMasters, setLoadingMasters] = useState(false);
@@ -105,6 +105,23 @@ export function InventoryPage({
   const [storageForm, setStorageForm] = useState<
     "location" | "warehouse" | "zone" | "bin" | ""
   >("");
+
+  const [operationForm, setOperationForm] = useState<
+    "opening" | "adjustment" | "transfer" | ""
+  >("");
+  const [operationSaving, setOperationSaving] = useState(false);
+
+  const [operationItemId, setOperationItemId] = useState("");
+  const [operationWarehouseId, setOperationWarehouseId] = useState("");
+  const [operationBinId, setOperationBinId] = useState("");
+  const [operationQuantity, setOperationQuantity] = useState("");
+  const [operationNotes, setOperationNotes] = useState("");
+
+  const [sourceWarehouseId, setSourceWarehouseId] = useState("");
+  const [sourceBinId, setSourceBinId] = useState("");
+  const [destinationWarehouseId, setDestinationWarehouseId] = useState("");
+  const [destinationBinId, setDestinationBinId] = useState("");
+
 
   const [storageSaving, setStorageSaving] = useState(false);
 
@@ -146,6 +163,156 @@ export function InventoryPage({
         .some((value) => String(value).toLowerCase().includes(query)),
     );
   }, [items, search]);
+
+  function binsForWarehouse(warehouseId: string) {
+    if (!warehouseId) return bins;
+
+    return bins.filter(
+      (bin) => bin.zone?.warehouseId === warehouseId,
+    );
+  }
+
+  function resetOperationForm() {
+    setOperationForm("");
+    setOperationItemId("");
+    setOperationWarehouseId("");
+    setOperationBinId("");
+    setOperationQuantity("");
+    setOperationNotes("");
+    setSourceWarehouseId("");
+    setSourceBinId("");
+    setDestinationWarehouseId("");
+    setDestinationBinId("");
+  }
+
+  function openOperationForm(
+    form: "opening" | "adjustment" | "transfer",
+  ) {
+    setError("");
+    setOperationForm(form);
+
+    if (
+      items.length === 0 ||
+      warehousesMaster.length === 0 ||
+      bins.length === 0
+    ) {
+      void loadStorageMasters();
+    }
+  }
+
+  async function submitStockOperation(event: React.FormEvent) {
+    event.preventDefault();
+    setError("");
+
+    const quantity = Number(operationQuantity);
+
+    if (!operationItemId) {
+      setError("Item is required.");
+      return;
+    }
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setError("Quantity must be greater than zero.");
+      return;
+    }
+
+    if (operationForm === "opening" || operationForm === "adjustment") {
+      if (!operationWarehouseId) {
+        setError("Warehouse is required.");
+        return;
+      }
+    }
+
+    if (operationForm === "transfer") {
+      if (!sourceWarehouseId || !destinationWarehouseId) {
+        setError("Source and destination warehouses are required.");
+        return;
+      }
+
+      if (
+        sourceWarehouseId === destinationWarehouseId &&
+        (sourceBinId || "") === (destinationBinId || "")
+      ) {
+        setError("Source and destination cannot be the same location.");
+        return;
+      }
+    }
+
+    let url = "";
+    let body: Record<string, unknown> = {};
+
+    if (operationForm === "opening") {
+      url = `${API}/api/stock/opening`;
+      body = {
+        itemId: operationItemId,
+        warehouseId: operationWarehouseId,
+        binId: operationBinId || undefined,
+        quantity,
+        notes: operationNotes.trim() || undefined,
+      };
+    }
+
+    if (operationForm === "adjustment") {
+      url = `${API}/api/stock/adjustment`;
+      body = {
+        itemId: operationItemId,
+        warehouseId: operationWarehouseId,
+        binId: operationBinId || undefined,
+        quantity,
+        notes: operationNotes.trim() || undefined,
+      };
+    }
+
+    if (operationForm === "transfer") {
+      url = `${API}/api/stock/transfer`;
+      body = {
+        itemId: operationItemId,
+        sourceWarehouseId,
+        sourceBinId: sourceBinId || undefined,
+        destinationWarehouseId,
+        destinationBinId: destinationBinId || undefined,
+        quantity,
+        notes: operationNotes.trim() || undefined,
+      };
+    }
+
+    if (!url) {
+      setError("Select a stock operation.");
+      return;
+    }
+
+    setOperationSaving(true);
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          apiError(result, "Unable to complete stock operation"),
+        );
+      }
+
+      resetOperationForm();
+      await onRefresh();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to complete stock operation",
+      );
+    } finally {
+      setOperationSaving(false);
+    }
+  }
 
   async function loadStorageMasters() {
     if (!token) return;
@@ -504,6 +671,32 @@ export function InventoryPage({
               </button>
             )}
 
+            {activeTab === "operations" && (
+              <div className="button-row">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => openOperationForm("opening")}
+                >
+                  + Opening Stock
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => openOperationForm("adjustment")}
+                >
+                  + Adjustment
+                </button>
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => openOperationForm("transfer")}
+                >
+                  + Transfer
+                </button>
+              </div>
+            )}
+
             {activeTab === "storage" && (
               <div className="button-row">
                 <button
@@ -602,6 +795,19 @@ export function InventoryPage({
               }}
             >
               Storage
+            </button>
+
+            <button
+              type="button"
+              className={
+                activeTab === "operations" ? "tab active" : "tab"
+              }
+              onClick={() => {
+                setActiveTab("operations");
+                void loadStorageMasters();
+              }}
+            >
+              Operations
             </button>
           </div>
         </div>
@@ -702,6 +908,217 @@ export function InventoryPage({
                 disabled={saving || loadingMasters}
               >
                 {saving ? "Creating..." : "Create Item"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {activeTab === "operations" && operationForm && (
+          <form
+            className="form-grid create-form"
+            onSubmit={submitStockOperation}
+          >
+            <div className="form-section-heading">
+              <div className="eyebrow">STOCK OPERATIONS</div>
+              <h3>
+                {operationForm === "opening"
+                  ? "Opening Stock"
+                  : operationForm === "adjustment"
+                    ? "Stock Adjustment"
+                    : "Stock Transfer"}
+              </h3>
+            </div>
+
+            <label>
+              Item
+              <select
+                value={operationItemId}
+                onChange={(event) =>
+                  setOperationItemId(event.target.value)
+                }
+                required
+              >
+                <option value="">Select item</option>
+                {items
+                  .filter((item) => item.active !== false)
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.sku} — {item.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+
+            {operationForm !== "transfer" ? (
+              <>
+                <label>
+                  Warehouse
+                  <select
+                    value={operationWarehouseId}
+                    onChange={(event) => {
+                      setOperationWarehouseId(event.target.value);
+                      setOperationBinId("");
+                    }}
+                    required
+                  >
+                    <option value="">Select warehouse</option>
+                    {warehousesMaster
+                      .filter((warehouse) => warehouse.active !== false)
+                      .map((warehouse) => (
+                        <option key={warehouse.id} value={warehouse.id}>
+                          {warehouse.code} — {warehouse.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+
+                <label>
+                  Bin
+                  <select
+                    value={operationBinId}
+                    onChange={(event) =>
+                      setOperationBinId(event.target.value)
+                    }
+                    disabled={!operationWarehouseId}
+                  >
+                    <option value="">Warehouse level</option>
+                    {binsForWarehouse(operationWarehouseId).map((bin) => (
+                      <option key={bin.id} value={bin.id}>
+                        {bin.code} — {bin.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            ) : (
+              <>
+                <label>
+                  Source Warehouse
+                  <select
+                    value={sourceWarehouseId}
+                    onChange={(event) => {
+                      setSourceWarehouseId(event.target.value);
+                      setSourceBinId("");
+                    }}
+                    required
+                  >
+                    <option value="">Select source warehouse</option>
+                    {warehousesMaster
+                      .filter((warehouse) => warehouse.active !== false)
+                      .map((warehouse) => (
+                        <option key={warehouse.id} value={warehouse.id}>
+                          {warehouse.code} — {warehouse.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+
+                <label>
+                  Source Bin
+                  <select
+                    value={sourceBinId}
+                    onChange={(event) =>
+                      setSourceBinId(event.target.value)
+                    }
+                    disabled={!sourceWarehouseId}
+                  >
+                    <option value="">Warehouse level</option>
+                    {binsForWarehouse(sourceWarehouseId).map((bin) => (
+                      <option key={bin.id} value={bin.id}>
+                        {bin.code} — {bin.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Destination Warehouse
+                  <select
+                    value={destinationWarehouseId}
+                    onChange={(event) => {
+                      setDestinationWarehouseId(event.target.value);
+                      setDestinationBinId("");
+                    }}
+                    required
+                  >
+                    <option value="">Select destination warehouse</option>
+                    {warehousesMaster
+                      .filter((warehouse) => warehouse.active !== false)
+                      .map((warehouse) => (
+                        <option key={warehouse.id} value={warehouse.id}>
+                          {warehouse.code} — {warehouse.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+
+                <label>
+                  Destination Bin
+                  <select
+                    value={destinationBinId}
+                    onChange={(event) =>
+                      setDestinationBinId(event.target.value)
+                    }
+                    disabled={!destinationWarehouseId}
+                  >
+                    <option value="">Warehouse level</option>
+                    {binsForWarehouse(destinationWarehouseId).map((bin) => (
+                      <option key={bin.id} value={bin.id}>
+                        {bin.code} — {bin.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            )}
+
+            <label>
+              Quantity
+              <input
+                type="number"
+                min="0.0001"
+                step="any"
+                value={operationQuantity}
+                onChange={(event) =>
+                  setOperationQuantity(event.target.value)
+                }
+                placeholder="0.00"
+                required
+              />
+            </label>
+
+            <label>
+              Notes
+              <input
+                value={operationNotes}
+                onChange={(event) =>
+                  setOperationNotes(event.target.value)
+                }
+                placeholder="Optional notes"
+              />
+            </label>
+
+            <div
+              style={{
+                display: "flex",
+                alignItems: "end",
+                gap: "8px",
+              }}
+            >
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={operationSaving}
+              >
+                {operationSaving ? "Saving..." : "Complete Operation"}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={resetOperationForm}
+                disabled={operationSaving}
+              >
+                Cancel
               </button>
             </div>
           </form>
@@ -890,7 +1307,56 @@ export function InventoryPage({
           </form>
         )}
 
-        {activeTab === "storage" ? (
+        {activeTab === "operations" ? (
+          <div className="operations-grid">
+            <div className="card">
+              <span>Opening Stock</span>
+              <strong>Initialize</strong>
+              <p>
+                Create the first stock balance for an item and storage
+                location.
+              </p>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => openOperationForm("opening")}
+              >
+                Start Opening Stock
+              </button>
+            </div>
+
+            <div className="card">
+              <span>Stock Adjustment</span>
+              <strong>Increase / Decrease</strong>
+              <p>
+                Correct an existing stock balance with a controlled
+                adjustment.
+              </p>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => openOperationForm("adjustment")}
+              >
+                Start Adjustment
+              </button>
+            </div>
+
+            <div className="card">
+              <span>Stock Transfer</span>
+              <strong>Move Inventory</strong>
+              <p>
+                Transfer stock between warehouses or bins.
+              </p>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => openOperationForm("transfer")}
+              >
+                Start Transfer
+              </button>
+            </div>
+          </div>
+        ) : activeTab === "storage" ? (
           <div className="storage-grid">
             <div>
               <div className="panel-header">
