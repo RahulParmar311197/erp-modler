@@ -970,6 +970,147 @@ describe("Accounting GL workflows", () => {
     }
   });
 
+  it("allows only one concurrent closing of the same accounting period", async () => {
+    const app = await buildApp();
+
+    try {
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          tenantCode: "MODLER",
+          email: "admin@modler.local",
+          password: "ModlerAdmin@2026!",
+        },
+      });
+
+      expect(login.statusCode).toBe(200);
+
+      const headers = {
+        authorization: `Bearer ${login.json().data.token}`,
+      };
+
+      const tenant = await prisma.tenant.findUniqueOrThrow({
+        where: { code: "MODLER" },
+      });
+
+      const fiscalYear = await prisma.fiscalYear.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          code: "FY2026",
+        },
+      });
+
+      const period = await prisma.accountingPeriod.create({
+        data: {
+          tenantId: tenant.id,
+          fiscalYearId: fiscalYear.id,
+          periodNumber: 99,
+          code: `CONCURRENT-CLOSE-${Date.now()}`,
+          name: "Concurrent close test",
+          startDate: new Date("2026-08-25T00:00:00.000Z"),
+          endDate: new Date("2026-08-26T00:00:00.000Z"),
+        },
+      });
+
+      const [first, second] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: `/api/accounting/periods/${period.id}/close`,
+          headers,
+        }),
+        app.inject({
+          method: "POST",
+          url: `/api/accounting/periods/${period.id}/close`,
+          headers,
+        }),
+      ]);
+
+      const statuses = [first.statusCode, second.statusCode].sort();
+
+      expect(statuses).toEqual([200, 400]);
+
+      const closed = await prisma.accountingPeriod.findUniqueOrThrow({
+        where: {
+          id: period.id,
+        },
+      });
+
+      expect(closed.status).toBe("CLOSED");
+      expect(closed.closedAt).toBeDefined();
+      expect(closed.closedBy).toBeDefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("allows only one concurrent closing of the same fiscal year", async () => {
+    const app = await buildApp();
+
+    try {
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          tenantCode: "MODLER",
+          email: "admin@modler.local",
+          password: "ModlerAdmin@2026!",
+        },
+      });
+
+      expect(login.statusCode).toBe(200);
+
+      const headers = {
+        authorization: `Bearer ${login.json().data.token}`,
+      };
+
+      const tenant = await prisma.tenant.findUniqueOrThrow({
+        where: { code: "MODLER" },
+      });
+
+      const suffix = Date.now();
+
+      const fiscalYear = await prisma.fiscalYear.create({
+        data: {
+          tenantId: tenant.id,
+          code: `CONCURRENT-FY-${suffix}`,
+          name: `Concurrent fiscal year ${suffix}`,
+          startDate: new Date("2027-01-01T00:00:00.000Z"),
+          endDate: new Date("2027-12-31T00:00:00.000Z"),
+        },
+      });
+
+      const [first, second] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: `/api/accounting/fiscal-years/${fiscalYear.id}/close`,
+          headers,
+        }),
+        app.inject({
+          method: "POST",
+          url: `/api/accounting/fiscal-years/${fiscalYear.id}/close`,
+          headers,
+        }),
+      ]);
+
+      const statuses = [first.statusCode, second.statusCode].sort();
+
+      expect(statuses).toEqual([200, 400]);
+
+      const closed = await prisma.fiscalYear.findUniqueOrThrow({
+        where: {
+          id: fiscalYear.id,
+        },
+      });
+
+      expect(closed.status).toBe("CLOSED");
+      expect(closed.closedAt).toBeDefined();
+      expect(closed.closedBy).toBeDefined();
+    } finally {
+      await app.close();
+    }
+  });
+
   it("rejects posting a voucher when its accounting period is closed", async () => {
     const app = await buildApp();
 
