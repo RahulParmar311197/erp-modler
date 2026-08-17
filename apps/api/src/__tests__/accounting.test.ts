@@ -822,6 +822,154 @@ describe("Accounting GL workflows", () => {
     }
 
   });
+  it("allows only one concurrent posting of the same voucher", async () => {
+    const app = await buildApp();
+
+    try {
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          tenantCode: "MODLER",
+          email: "admin@modler.local",
+          password: "ModlerAdmin@2026!",
+        },
+      });
+
+      expect(login.statusCode).toBe(200);
+
+      const headers = {
+        authorization: `Bearer ${login.json().data.token}`,
+      };
+
+      const tenant = await prisma.tenant.findUniqueOrThrow({
+        where: { code: "MODLER" },
+      });
+
+      const organization = await prisma.organization.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          code: "MODLER-IN",
+        },
+      });
+
+      const voucherType = await prisma.voucherType.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          code: "JOURNAL",
+          active: true,
+        },
+      });
+
+      const fiscalYear = await prisma.fiscalYear.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          code: "FY2026",
+          status: "OPEN",
+        },
+      });
+
+      const period = await prisma.accountingPeriod.findFirstOrThrow({
+        where: {
+          tenantId: tenant.id,
+          code: "FY2026-P05",
+          status: "OPEN",
+        },
+      });
+
+      const accounts = await prisma.glAccount.findMany({
+        where: {
+          tenantId: tenant.id,
+          code: {
+            in: ["1000", "4000"],
+          },
+          active: true,
+        },
+      });
+
+      const cash = accounts.find((account) => account.code === "1000");
+      const revenue = accounts.find((account) => account.code === "4000");
+
+      expect(cash).toBeDefined();
+      expect(revenue).toBeDefined();
+
+      const suffix = Date.now();
+
+      const create = await app.inject({
+        method: "POST",
+        url: "/api/accounting/vouchers",
+        headers,
+        payload: {
+          organizationId: organization.id,
+          voucherTypeId: voucherType.id,
+          fiscalYearId: fiscalYear.id,
+          accountingPeriodId: period.id,
+          voucherDate: "2026-08-12",
+          referenceNumber: `CONCURRENT-VOUCHER-${suffix}`,
+          narration: `Concurrent voucher test ${suffix}`,
+          lines: [
+            {
+              accountId: cash!.id,
+              debit: 200,
+              credit: 0,
+            },
+            {
+              accountId: revenue!.id,
+              debit: 0,
+              credit: 200,
+            },
+          ],
+        },
+      });
+
+      expect(create.statusCode).toBe(201);
+
+      const voucher = create.json().data;
+
+      const [first, second] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: `/api/accounting/vouchers/${voucher.id}/post`,
+          headers,
+        }),
+        app.inject({
+          method: "POST",
+          url: `/api/accounting/vouchers/${voucher.id}/post`,
+          headers,
+        }),
+      ]);
+
+      const statuses = [first.statusCode, second.statusCode].sort();
+
+      expect(statuses).toEqual([200, 400]);
+
+      const posted = await prisma.voucher.findUniqueOrThrow({
+        where: {
+          id: voucher.id,
+        },
+      });
+
+      expect(posted.status).toBe("POSTED");
+
+      const journals = await prisma.journalEntry.findMany({
+        where: {
+          tenantId: tenant.id,
+          sourceType: "Voucher",
+          sourceId: voucher.id,
+        },
+        include: {
+          lines: true,
+        },
+      });
+
+      expect(journals).toHaveLength(1);
+      expect(journals[0].status).toBe("POSTED");
+      expect(journals[0].lines).toHaveLength(2);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("rejects posting a voucher when its accounting period is closed", async () => {
     const app = await buildApp();
 
