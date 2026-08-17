@@ -8,40 +8,46 @@ datasource db {
 }
 
 model Tenant {
-  id               String            @id @default(uuid())
-  code             String            @unique
-  name             String
-  status           TenantStatus      @default(ACTIVE)
-  defaultCurrency  String            @default("USD")
-  timezone         String            @default("UTC")
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  auditEvents      AuditEvent[]
-  customers        Customer[]
-  customerPayments CustomerPayment[]
-  glAccounts      GlAccount[]
-  journalEntries  JournalEntry[]
-  journalLines    JournalLine[]
-  goodsReceipts    GoodsReceipt[]
-  items            Item[]
-  itemGroups       ItemGroup[]
-  locations        Location[]
-  organizations    Organization[]
-  purchaseOrders   PurchaseOrder[]
-  roles            Role[]
-  salesInvoices    SalesInvoice[]
-  salesOrders      SalesOrder[]
-  shipments        Shipment[]
-  stockBalances    StockBalance[]
-  stockMovements   StockMovement[]
-  suppliers        Supplier[]
-  unitOfMeasures   UnitOfMeasure[]
-  users            User[]
-  vendorBills      VendorBill[]
-  vendorPayments   VendorPayment[]
-  warehouses       Warehouse[]
-  warehouseBins    WarehouseBin[]
-  warehouseZones   WarehouseZone[]
+  id                String             @id @default(uuid())
+  code              String             @unique
+  name              String
+  status            TenantStatus       @default(ACTIVE)
+  defaultCurrency   String             @default("USD")
+  timezone          String             @default("UTC")
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  auditEvents       AuditEvent[]
+  customers         Customer[]
+  customerPayments  CustomerPayment[]
+  glAccounts        GlAccount[]
+  glAccountGroups   GlAccountGroup[]
+  journalEntries    JournalEntry[]
+  journalLines      JournalLine[]
+  goodsReceipts     GoodsReceipt[]
+  items             Item[]
+  itemGroups        ItemGroup[]
+  locations         Location[]
+  organizations     Organization[]
+  purchaseOrders    PurchaseOrder[]
+  roles             Role[]
+  salesInvoices     SalesInvoice[]
+  salesOrders       SalesOrder[]
+  shipments         Shipment[]
+  stockBalances     StockBalance[]
+  stockMovements    StockMovement[]
+  suppliers         Supplier[]
+  unitOfMeasures    UnitOfMeasure[]
+  users             User[]
+  vendorBills       VendorBill[]
+  vendorPayments    VendorPayment[]
+  warehouses        Warehouse[]
+  warehouseBins     WarehouseBin[]
+  warehouseZones    WarehouseZone[]
+  fiscalYears       FiscalYear[]
+  accountingPeriods AccountingPeriod[]
+  voucherTypes      VoucherType[]
+  vouchers          Voucher[]
+  voucherLines      VoucherLine[]
 }
 
 model Organization {
@@ -57,6 +63,7 @@ model Organization {
   customers      Customer[]
   glAccounts     GlAccount[]
   journalEntries JournalEntry[]
+  vouchers       Voucher[]
   locations      Location[]
   parent         Organization?    @relation("OrganizationTree", fields: [parentId], references: [id])
   children       Organization[]   @relation("OrganizationTree")
@@ -454,10 +461,170 @@ model GoodsReceiptLine {
   @@index([purchaseOrderLineId])
 }
 
+model FiscalYear {
+  id        String           @id @default(uuid())
+  tenantId  String
+  code      String
+  name      String
+  startDate DateTime
+  endDate   DateTime
+  status    FiscalYearStatus @default(OPEN)
+  closedAt  DateTime?
+  closedBy  String?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  periods        AccountingPeriod[]
+  journalEntries JournalEntry[]
+  vouchers       Voucher[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, startDate, endDate])
+  @@index([tenantId, status])
+}
+
+model AccountingPeriod {
+  id           String                 @id @default(uuid())
+  tenantId     String
+  fiscalYearId String
+  periodNumber Int
+  code         String
+  name         String
+  startDate    DateTime
+  endDate      DateTime
+  status       AccountingPeriodStatus @default(OPEN)
+  closedAt     DateTime?
+  closedBy     String?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fiscalYear     FiscalYear     @relation(fields: [fiscalYearId], references: [id], onDelete: Cascade)
+  journalEntries JournalEntry[]
+  vouchers       Voucher[]
+
+  @@unique([tenantId, code])
+  @@unique([fiscalYearId, periodNumber])
+  @@index([tenantId, startDate, endDate])
+  @@index([tenantId, status])
+}
+
+enum VoucherTypeCode {
+  SALES
+  PURCHASE
+  RECEIPT
+  PAYMENT
+  CONTRA
+  JOURNAL
+  DEBIT_NOTE
+  CREDIT_NOTE
+}
+
+enum VoucherStatus {
+  DRAFT
+  POSTED
+  CANCELLED
+}
+
+model VoucherType {
+  id            String          @id @default(uuid())
+  tenantId      String
+  code          String
+  name          String
+  voucherType   VoucherTypeCode
+  prefix        String?
+  nextNumber    Int             @default(1)
+  numberPadding Int             @default(4)
+  active        Boolean         @default(true)
+  systemDefined Boolean         @default(false)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vouchers Voucher[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, voucherType])
+  @@index([tenantId, active])
+}
+
+model Voucher {
+  id                 String        @id @default(uuid())
+  tenantId           String
+  organizationId     String
+  voucherTypeId      String
+  fiscalYearId       String?
+  accountingPeriodId String?
+  voucherNumber      String
+  voucherDate        DateTime      @default(now())
+  status             VoucherStatus @default(DRAFT)
+  referenceNumber    String?
+  narration          String?
+  totalAmount        Decimal       @default(0)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  voucherType      VoucherType       @relation(fields: [voucherTypeId], references: [id])
+  fiscalYear       FiscalYear?       @relation(fields: [fiscalYearId], references: [id])
+  accountingPeriod AccountingPeriod? @relation(fields: [accountingPeriodId], references: [id])
+  lines            VoucherLine[]
+
+  @@unique([tenantId, voucherNumber])
+  @@index([tenantId, voucherTypeId])
+  @@index([tenantId, voucherDate])
+  @@index([tenantId, status])
+  @@index([tenantId, fiscalYearId])
+  @@index([tenantId, accountingPeriodId])
+}
+
+model VoucherLine {
+  id          String   @id @default(uuid())
+  tenantId    String
+  voucherId   String
+  accountId   String
+  debit       Decimal  @default(0)
+  credit      Decimal  @default(0)
+  description String?
+  createdAt   DateTime @default(now())
+
+  tenant  Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  voucher Voucher   @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  account GlAccount @relation(fields: [accountId], references: [id])
+
+  @@index([tenantId, voucherId])
+  @@index([tenantId, accountId])
+}
+
+model GlAccountGroup {
+  id            String        @id @default(uuid())
+  tenantId      String
+  parentId      String?
+  code          String
+  name          String
+  nature        GlAccountType
+  systemDefined Boolean       @default(false)
+  active        Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parent   GlAccountGroup?  @relation("GlAccountGroupTree", fields: [parentId], references: [id])
+  children GlAccountGroup[] @relation("GlAccountGroupTree")
+  accounts GlAccount[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, parentId])
+  @@index([tenantId, nature])
+}
+
 model GlAccount {
   id             String          @id @default(uuid())
   tenantId       String
   organizationId String?
+  groupId        String?
   code           String
   name           String
   type           GlAccountType
@@ -466,31 +633,40 @@ model GlAccount {
   updatedAt      DateTime        @updatedAt
   tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   organization   Organization?   @relation(fields: [organizationId], references: [id])
+  group          GlAccountGroup? @relation(fields: [groupId], references: [id])
   journalLines   JournalLine[]
+  voucherLines   VoucherLine[]
 
   @@unique([tenantId, code])
   @@index([tenantId, type])
   @@index([tenantId, organizationId])
+  @@index([tenantId, groupId])
 }
 
 model JournalEntry {
-  id             String             @id @default(uuid())
-  tenantId       String
-  organizationId String
-  entryNumber    String
-  entryDate      DateTime           @default(now())
-  description    String?
-  sourceType     String?
-  sourceId       String?
-  status         JournalEntryStatus @default(POSTED)
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
-  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  organization   Organization       @relation(fields: [organizationId], references: [id])
-  lines          JournalLine[]
+  id                 String             @id @default(uuid())
+  tenantId           String
+  organizationId     String
+  entryNumber        String
+  entryDate          DateTime           @default(now())
+  description        String?
+  sourceType         String?
+  sourceId           String?
+  fiscalYearId       String?
+  accountingPeriodId String?
+  status             JournalEntryStatus @default(POSTED)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  tenant             Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  organization       Organization       @relation(fields: [organizationId], references: [id])
+  fiscalYear         FiscalYear?        @relation(fields: [fiscalYearId], references: [id])
+  accountingPeriod   AccountingPeriod?  @relation(fields: [accountingPeriodId], references: [id])
+  lines              JournalLine[]
 
   @@unique([tenantId, entryNumber])
   @@unique([tenantId, sourceType, sourceId])
+  @@index([tenantId, fiscalYearId])
+  @@index([tenantId, accountingPeriodId])
   @@index([tenantId, entryDate])
   @@index([tenantId, status])
 }
@@ -775,6 +951,16 @@ model CustomerPayment {
   @@unique([tenantId, paymentNumber])
   @@index([tenantId, customerId])
   @@index([tenantId, salesInvoiceId])
+}
+
+enum FiscalYearStatus {
+  OPEN
+  CLOSED
+}
+
+enum AccountingPeriodStatus {
+  OPEN
+  CLOSED
 }
 
 enum GlAccountType {

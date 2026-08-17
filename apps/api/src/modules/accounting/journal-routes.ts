@@ -555,6 +555,50 @@ export async function journalRoutes(
         });
       }
 
+      if (entry.accountingPeriodId) {
+        const period = await prisma.accountingPeriod.findFirst({
+          where: {
+            id: entry.accountingPeriodId,
+            tenantId: claims.tenantId,
+            status: "OPEN",
+          },
+        });
+
+        if (!period) {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message:
+                  "Journal accounting period is closed or unavailable",
+              },
+            ],
+          });
+        }
+      }
+
+      if (entry.fiscalYearId) {
+        const fiscalYear = await prisma.fiscalYear.findFirst({
+          where: {
+            id: entry.fiscalYearId,
+            tenantId: claims.tenantId,
+            status: "OPEN",
+          },
+        });
+
+        if (!fiscalYear) {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message:
+                  "Journal fiscal year is closed or unavailable",
+              },
+            ],
+          });
+        }
+      }
+
       const posted = await prisma.journalEntry.updateMany({
         where: {
           id: entry.id,

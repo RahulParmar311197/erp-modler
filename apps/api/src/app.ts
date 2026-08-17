@@ -30,6 +30,8 @@ import { salesInvoiceRoutes } from "./modules/sales/invoice-routes";
 import { accountsPayableRoutes } from "./modules/accounts-payable/routes";
 import { accountingRoutes } from "./modules/accounting/routes";
 import { journalRoutes } from "./modules/accounting/journal-routes";
+import { voucherRoutes } from "./modules/accounting/voucher-routes";
+import { periodRoutes } from "./modules/accounting/period-routes";
 
 export async function buildApp() {
   const authSecret = process.env.AUTH_SECRET;
@@ -340,6 +342,8 @@ export async function buildApp() {
     await accountsPayableRoutes(instance);
     await accountingRoutes(instance, prisma);
     await journalRoutes(instance, prisma);
+    await voucherRoutes(instance, prisma);
+    await periodRoutes(instance, prisma);
   });
 
   return app;

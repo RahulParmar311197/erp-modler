@@ -69,6 +69,96 @@ async function main() {
     },
   });
 
+  /*
+   * Accounting foundation
+   */
+  const fiscalYear = await prisma.fiscalYear.upsert({
+    where: {
+      tenantId_code: {
+        tenantId: tenant.id,
+        code: "FY2026",
+      },
+    },
+    update: {
+      name: "Financial Year 2026",
+      startDate: new Date("2026-04-01T00:00:00.000Z"),
+      endDate: new Date("2027-03-31T00:00:00.000Z"),
+      status: "OPEN",
+    },
+    create: {
+      tenantId: tenant.id,
+      code: "FY2026",
+      name: "Financial Year 2026",
+      startDate: new Date("2026-04-01T00:00:00.000Z"),
+      endDate: new Date("2027-03-31T00:00:00.000Z"),
+      status: "OPEN",
+    },
+  });
+
+  await prisma.accountingPeriod.upsert({
+    where: {
+      tenantId_code: {
+        tenantId: tenant.id,
+        code: "FY2026-P05",
+      },
+    },
+    update: {
+      fiscalYearId: fiscalYear.id,
+      name: "August 2026",
+      periodNumber: 5,
+      startDate: new Date("2026-08-01T00:00:00.000Z"),
+      endDate: new Date("2026-08-31T00:00:00.000Z"),
+      status: "OPEN",
+    },
+    create: {
+      tenantId: tenant.id,
+      fiscalYearId: fiscalYear.id,
+      code: "FY2026-P05",
+      name: "August 2026",
+      periodNumber: 5,
+      startDate: new Date("2026-08-01T00:00:00.000Z"),
+      endDate: new Date("2026-08-31T00:00:00.000Z"),
+      status: "OPEN",
+    },
+  });
+
+  const voucherTypes = [
+    ["JOURNAL", "Journal Voucher", "JOURNAL", "JV-"],
+    ["RECEIPT", "Receipt Voucher", "RECEIPT", "RV-"],
+    ["PAYMENT", "Payment Voucher", "PAYMENT", "PV-"],
+    ["SALES", "Sales Voucher", "SALES", "SV-"],
+    ["PURCHASE", "Purchase Voucher", "PURCHASE", "PUR-"],
+    ["CONTRA", "Contra Voucher", "CONTRA", "CV-"],
+  ] as const;
+
+  for (const [code, name, voucherType, prefix] of voucherTypes) {
+    await prisma.voucherType.upsert({
+      where: {
+        tenantId_code: {
+          tenantId: tenant.id,
+          code,
+        },
+      },
+      update: {
+        name,
+        voucherType,
+        prefix,
+        numberPadding: 6,
+        active: true,
+      },
+      create: {
+        tenantId: tenant.id,
+        code,
+        name,
+        voucherType,
+        prefix,
+        numberPadding: 6,
+        nextNumber: 1,
+        active: true,
+      },
+    });
+  }
+
   const permissionCodes = [
     "tenant.view",
     "tenant.update",

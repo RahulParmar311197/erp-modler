@@ -17,6 +17,8 @@ type PostJournalInput = {
   description?: string;
   sourceType?: string;
   sourceId?: string;
+  fiscalYearId?: string;
+  accountingPeriodId?: string;
   lines: JournalLineInput[];
 };
 
@@ -88,6 +90,8 @@ export async function postJournalEntry(
       description: input.description ?? null,
       sourceType: input.sourceType ?? null,
       sourceId: input.sourceId ?? null,
+      fiscalYearId: input.fiscalYearId ?? null,
+      accountingPeriodId: input.accountingPeriodId ?? null,
       status: "POSTED",
       lines: {
         create: input.lines.map((line) => ({
