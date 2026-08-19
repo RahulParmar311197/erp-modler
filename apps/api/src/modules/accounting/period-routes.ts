@@ -179,15 +179,44 @@ export async function periodRoutes(
         );
       }
 
-      const fiscalYear = await prisma.fiscalYear.create({
-        data: {
-          tenantId: claims.tenantId,
-          code,
-          name,
-          startDate,
-          endDate,
-        },
-      });
+      let fiscalYear;
+
+      try {
+        fiscalYear = await prisma.fiscalYear.create({
+          data: {
+            tenantId: claims.tenantId,
+            code,
+            name,
+            startDate,
+            endDate,
+          },
+        });
+      } catch (error) {
+        /*
+         * The pre-check above is not sufficient for concurrent requests.
+         *
+         * The database unique constraint on (tenantId, code)
+         * is the final authority. If another request creates the
+         * fiscal year between our pre-check and create(), Prisma raises P2002.
+         */
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "P2002"
+        ) {
+          return reply.code(409).send({
+            errors: [
+              {
+                code: "CONFLICT",
+                message: "Fiscal year code already exists",
+              },
+            ],
+          });
+        }
+
+        throw error;
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,
@@ -526,6 +555,7 @@ export async function periodRoutes(
         await prisma.accountingPeriod.findFirst({
           where: {
             tenantId: claims.tenantId,
+            fiscalYearId,
             startDate: {
               lt: endDate,
             },
@@ -535,7 +565,14 @@ export async function periodRoutes(
           },
         });
 
-      if (overlapping) {
+      if (
+        overlapping &&
+        !(
+          overlapping.fiscalYearId === fiscalYearId &&
+          overlapping.periodNumber === periodNumber &&
+          overlapping.code === code
+        )
+      ) {
         return error(
           reply,
           409,
@@ -544,8 +581,10 @@ export async function periodRoutes(
         );
       }
 
-      const period =
-        await prisma.accountingPeriod.create({
+      let period;
+
+      try {
+        period = await prisma.accountingPeriod.create({
           data: {
             tenantId: claims.tenantId,
             fiscalYearId,
@@ -559,6 +598,42 @@ export async function periodRoutes(
             fiscalYear: true,
           },
         });
+      } catch (error) {
+        /*
+         * The pre-checks above are not sufficient for concurrent requests.
+         *
+         * The database unique constraints are the final authority.
+         * Convert either duplicate-code or duplicate-period-number races
+         * into the same 409 responses as the normal pre-check path.
+         */
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "P2002"
+        ) {
+          const message =
+            "meta" in error &&
+            error.meta &&
+            typeof error.meta === "object" &&
+            "target" in error.meta &&
+            Array.isArray(error.meta.target) &&
+            error.meta.target.includes("periodNumber")
+              ? "Period number already exists in this fiscal year"
+              : "Accounting period code already exists";
+
+          return reply.code(409).send({
+            errors: [
+              {
+                code: "CONFLICT",
+                message,
+              },
+            ],
+          });
+        }
+
+        throw error;
+      }
 
       await writeAuditEvent(prisma, {
         tenantId: claims.tenantId,

@@ -785,6 +785,7 @@ export async function accountsPayableRoutes(app: FastifyInstance) {
       const body = request.body as {
         supplierId?: string;
         vendorBillId?: string;
+        bankAccountId?: string;
         paymentNumber?: string;
         paymentDate?: string;
         amount?: number;
@@ -805,13 +806,37 @@ export async function accountsPayableRoutes(app: FastifyInstance) {
             {
               code: "VALIDATION_ERROR",
               message:
-                "supplierId, vendorBillId, paymentNumber and amount are required",
+                "supplierId, vendorBillId, bankAccountId, paymentNumber and amount are required",
             },
           ],
         });
       }
 
       const paymentAmount = body.amount;
+
+      const bankAccountId =
+        body.bankAccountId ??
+        (
+          await prisma.bankAccount.findFirst({
+            where: {
+              tenantId: claims.tenantId,
+              active: true,
+            },
+            orderBy: { code: "asc" },
+            select: { id: true },
+          })
+        )?.id;
+
+      if (!bankAccountId) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message: "An active bank account is required for vendor payment",
+            },
+          ],
+        });
+      }
 
       if (paymentAmount === undefined || paymentAmount <= 0) {
         return reply.code(400).send({
@@ -875,6 +900,27 @@ export async function accountsPayableRoutes(app: FastifyInstance) {
             {
               code: "VALIDATION_ERROR",
               message: "Vendor bill does not exist",
+            },
+          ],
+        });
+      }
+
+      const bankAccount = await prisma.bankAccount.findFirst({
+        where: {
+          id: body.bankAccountId,
+          tenantId: claims.tenantId,
+          organizationId: bill.organizationId,
+          active: true,
+        },
+      });
+
+      if (!bankAccount) {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "VALIDATION_ERROR",
+              message:
+                "Bank account does not exist, is inactive, or does not belong to the vendor bill organization",
             },
           ],
         });
@@ -990,6 +1036,7 @@ export async function accountsPayableRoutes(app: FastifyInstance) {
             tenantId: claims.tenantId,
             supplierId: body.supplierId!,
             vendorBillId: body.vendorBillId!,
+            bankAccountId,
             paymentNumber,
             paymentDate: body.paymentDate
               ? new Date(body.paymentDate)
@@ -1020,7 +1067,7 @@ export async function accountsPayableRoutes(app: FastifyInstance) {
               credit: 0,
             },
             {
-              accountCode: "1000",
+              accountId: bankAccount.glAccountId,
               description: `Cash / Bank - ${paymentNumber}`,
               debit: 0,
               credit: paymentAmount,

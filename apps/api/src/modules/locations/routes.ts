@@ -30,7 +30,7 @@ export async function locationRoutes(
           return requirePermission(
             request,
             reply,
-            "organization.view",
+            "location.view",
           );
         },
       ],
@@ -69,7 +69,7 @@ export async function locationRoutes(
           return requirePermission(
             request,
             reply,
-            "organization.create",
+            "location.create",
           );
         },
       ],
@@ -173,4 +173,228 @@ export async function locationRoutes(
       });
     },
   );
+
+  app.put(
+    "/api/locations/:id",
+    {
+      preHandler: [
+        authenticate,
+        async (
+          request: FastifyRequest,
+          reply: FastifyReply,
+        ) => {
+          return requirePermission(
+            request,
+            reply,
+            "location.update",
+          );
+        },
+      ],
+    },
+    async (request, reply) => {
+      const claims = request.user as AuthClaims;
+      const { id } = request.params as { id: string };
+
+      const body = request.body as {
+        code?: string;
+        name?: string;
+        organizationId?: string | null;
+        addressLine1?: string;
+        addressLine2?: string;
+        city?: string;
+        state?: string;
+        postalCode?: string;
+        country?: string;
+        timezone?: string;
+        active?: boolean;
+      };
+
+      const existing = await prisma.location.findFirst({
+        where: {
+          id,
+          tenantId: claims.tenantId,
+        },
+      });
+
+      if (!existing) {
+        return reply.code(404).send({
+          errors: [
+            {
+              code: "NOT_FOUND",
+              message: "Location not found",
+            },
+          ],
+        });
+      }
+
+      if (body.organizationId) {
+        const organization =
+          await prisma.organization.findFirst({
+            where: {
+              id: body.organizationId,
+              tenantId: claims.tenantId,
+            },
+          });
+
+        if (!organization) {
+          return reply.code(400).send({
+            errors: [
+              {
+                code: "VALIDATION_ERROR",
+                message: "Organization does not belong to tenant",
+              },
+            ],
+          });
+        }
+      }
+
+      if (body.code && body.code !== existing.code) {
+        const duplicate = await prisma.location.findFirst({
+          where: {
+            tenantId: claims.tenantId,
+            code: body.code,
+            NOT: {
+              id,
+            },
+          },
+        });
+
+        if (duplicate) {
+          return reply.code(409).send({
+            errors: [
+              {
+                code: "DUPLICATE_ERROR",
+                message: "Location code already exists",
+              },
+            ],
+          });
+        }
+      }
+
+      const location = await prisma.location.update({
+        where: {
+          id,
+        },
+        data: {
+          ...(body.code !== undefined && { code: body.code }),
+          ...(body.name !== undefined && { name: body.name }),
+          ...(body.organizationId !== undefined && {
+            organizationId: body.organizationId,
+          }),
+          ...(body.addressLine1 !== undefined && {
+            addressLine1: body.addressLine1,
+          }),
+          ...(body.addressLine2 !== undefined && {
+            addressLine2: body.addressLine2,
+          }),
+          ...(body.city !== undefined && { city: body.city }),
+          ...(body.state !== undefined && { state: body.state }),
+          ...(body.postalCode !== undefined && {
+            postalCode: body.postalCode,
+          }),
+          ...(body.country !== undefined && {
+            country: body.country,
+          }),
+          ...(body.timezone !== undefined && {
+            timezone: body.timezone,
+          }),
+          ...(body.active !== undefined && {
+            active: body.active,
+          }),
+        },
+      });
+
+      await writeAuditEvent(prisma, {
+        tenantId: claims.tenantId,
+        actorUserId: claims.sub,
+        action: "UPDATE",
+        entityType: "Location",
+        entityId: location.id,
+        previousState: existing,
+        newState: location,
+      });
+
+      return reply.send({
+        data: location,
+      });
+    },
+  );
+
+  app.delete(
+    "/api/locations/:id",
+    {
+      preHandler: [
+        authenticate,
+        async (
+          request: FastifyRequest,
+          reply: FastifyReply,
+        ) => {
+          return requirePermission(
+            request,
+            reply,
+            "location.delete",
+          );
+        },
+      ],
+    },
+    async (request, reply) => {
+      const claims = request.user as AuthClaims;
+      const { id } = request.params as { id: string };
+
+      const existing = await prisma.location.findFirst({
+        where: {
+          id,
+          tenantId: claims.tenantId,
+        },
+      });
+
+      if (!existing) {
+        return reply.code(404).send({
+          errors: [
+            {
+              code: "NOT_FOUND",
+              message: "Location not found",
+            },
+          ],
+        });
+      }
+
+      const warehouseCount = await prisma.warehouse.count({
+        where: {
+          locationId: id,
+          tenantId: claims.tenantId,
+        },
+      });
+
+      if (warehouseCount > 0) {
+        return reply.code(409).send({
+          errors: [
+            {
+              code: "DEPENDENCY_ERROR",
+              message:
+                "Location cannot be deleted while warehouses are assigned to it",
+            },
+          ],
+        });
+      }
+
+      await prisma.location.delete({
+        where: {
+          id,
+        },
+      });
+
+      await writeAuditEvent(prisma, {
+        tenantId: claims.tenantId,
+        actorUserId: claims.sub,
+        action: "DELETE",
+        entityType: "Location",
+        entityId: existing.id,
+        previousState: existing,
+      });
+
+      return reply.code(204).send();
+    },
+  );
+
 }

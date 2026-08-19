@@ -146,6 +146,7 @@ describe("Accounts payable workflows", () => {
         },
       });
 
+      console.log("\n=== PAYMENT RESPONSE ===", firstPayment.statusCode, firstPayment.body);
       expect(firstPayment.statusCode).toBe(201);
 
       const paymentOne = firstPayment.json().data;

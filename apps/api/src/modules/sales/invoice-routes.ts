@@ -506,14 +506,17 @@ export async function salesInvoiceRoutes(app: FastifyInstance, prisma: PrismaCli
         paymentNumber?: string;
         paymentDate?: string;
         amount?: number;
+        bankAccountId?: string;
         notes?: string;
       };
 
       const paymentNumber = body.paymentNumber?.trim();
       const amount = body.amount;
+      const bankAccountId = body.bankAccountId?.trim();
 
       if (
         !paymentNumber ||
+        !bankAccountId ||
         amount === undefined ||
         amount <= 0
       ) {
@@ -522,7 +525,7 @@ export async function salesInvoiceRoutes(app: FastifyInstance, prisma: PrismaCli
             {
               code: "VALIDATION_ERROR",
               message:
-                "paymentNumber and positive amount are required",
+                "paymentNumber, bankAccountId and positive amount are required",
             },
           ],
         });
@@ -592,6 +595,35 @@ export async function salesInvoiceRoutes(app: FastifyInstance, prisma: PrismaCli
           };
         }
 
+        const bankAccount = await tx.bankAccount.findFirst({
+          where: {
+            id: bankAccountId,
+            tenantId: claims.tenantId,
+            organizationId: invoice.organizationId,
+            active: true,
+          },
+          include: {
+            glAccount: true,
+          },
+        });
+
+        if (!bankAccount) {
+          return {
+            ok: false as const,
+            reason: "INVALID_BANK_ACCOUNT" as const,
+          };
+        }
+
+        if (
+          !bankAccount.glAccount.active ||
+          bankAccount.glAccount.type !== "ASSET"
+        ) {
+          return {
+            ok: false as const,
+            reason: "INVALID_BANK_GL_ACCOUNT" as const,
+          };
+        }
+
         const existing = await tx.customerPayment.findFirst({
           where: {
             tenantId: claims.tenantId,
@@ -631,8 +663,8 @@ export async function salesInvoiceRoutes(app: FastifyInstance, prisma: PrismaCli
             sourceId: payment.id,
             lines: [
               {
-                accountCode: "1000",
-                description: `Cash / Bank - ${paymentNumber}`,
+                accountId: bankAccount.glAccountId,
+                description: `${bankAccount.name} - ${paymentNumber}`,
                 debit: amount,
                 credit: 0,
               },
@@ -683,6 +715,29 @@ export async function salesInvoiceRoutes(app: FastifyInstance, prisma: PrismaCli
           previousInvoice: invoice,
         };
       });
+
+      if (!result.ok && result.reason === "INVALID_BANK_ACCOUNT") {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "INVALID_BANK_ACCOUNT",
+              message: "Active bank account is required",
+            },
+          ],
+        });
+      }
+
+      if (!result.ok && result.reason === "INVALID_BANK_GL_ACCOUNT") {
+        return reply.code(400).send({
+          errors: [
+            {
+              code: "INVALID_BANK_GL_ACCOUNT",
+              message:
+                "Bank account must map to an active asset GL account",
+            },
+          ],
+        });
+      }
 
       if (!result.ok) {
         if (result.reason === "MISSING") {

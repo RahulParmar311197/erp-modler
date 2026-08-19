@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type BalanceSheetRow = {
   accountId: string;
@@ -97,7 +97,7 @@ export function BalanceSheetPage({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  async function loadReport() {
+  const loadReport = useCallback(async () => {
     if (!token) return;
 
     setLoading(true);
@@ -141,11 +141,11 @@ export function BalanceSheetPage({
     } finally {
       setLoading(false);
     }
-  }
+  }, [token, toDate]);
 
   useEffect(() => {
     void loadReport();
-  }, [token]);
+  }, [loadReport]);
 
   return (
     <>

@@ -9,6 +9,7 @@ import { prisma } from "./lib/prisma";
 import {
   AuthClaims,
   authenticate,
+  requirePermission,
 } from "./auth/authorization";
 
 import { organizationRoutes } from "./modules/organizations/routes";
@@ -32,6 +33,10 @@ import { accountingRoutes } from "./modules/accounting/routes";
 import { journalRoutes } from "./modules/accounting/journal-routes";
 import { voucherRoutes } from "./modules/accounting/voucher-routes";
 import { periodRoutes } from "./modules/accounting/period-routes";
+import { bankAccountRoutes } from "./modules/banking/bank-account-routes";
+import { transactionRoutes } from "./modules/banking/transaction-routes";
+import { reconciliationRoutes } from "./modules/banking/reconciliation-routes";
+import { partyLedgerRoutes } from "./modules/party-ledger/routes";
 
 export async function buildApp() {
   const authSecret = process.env.AUTH_SECRET;
@@ -98,8 +103,29 @@ export async function buildApp() {
   /**
    * Tenant listing
    */
-  app.get("/api/tenants", async () => {
+  app.get("/api/tenants", async (request, reply) => {
+    const authResult = await authenticate(request, reply);
+
+    if (authResult) {
+      return authResult;
+    }
+
+    const permissionResult = await requirePermission(
+      request,
+      reply,
+      "tenant.view",
+    );
+
+    if (permissionResult) {
+      return permissionResult;
+    }
+
+    const claims = request.user as AuthClaims;
+
     const tenants = await prisma.tenant.findMany({
+      where: {
+        id: claims.tenantId,
+      },
       orderBy: {
         name: "asc",
       },
@@ -340,10 +366,14 @@ export async function buildApp() {
     await salesInvoiceRoutes(instance, prisma);
     await goodsReceiptRoutes(instance);
     await accountsPayableRoutes(instance);
+    await partyLedgerRoutes(instance);
     await accountingRoutes(instance, prisma);
     await journalRoutes(instance, prisma);
     await voucherRoutes(instance, prisma);
     await periodRoutes(instance, prisma);
+    await bankAccountRoutes(instance, prisma);
+    await transactionRoutes(instance, prisma);
+    await reconciliationRoutes(instance, prisma);
   });
 
   return app;

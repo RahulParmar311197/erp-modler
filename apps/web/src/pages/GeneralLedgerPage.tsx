@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type GlAccount = {
   id: string;
@@ -79,7 +79,7 @@ export function GeneralLedgerPage({
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState("");
 
-  async function loadReports() {
+  const loadReports = useCallback(async () => {
     if (!token) return;
 
     setReportLoading(true);
@@ -138,11 +138,11 @@ export function GeneralLedgerPage({
     } finally {
       setReportLoading(false);
     }
-  }
+  }, [fromDate, toDate, token]);
 
   useEffect(() => {
     void loadReports();
-  }, [token]);
+  }, [loadReports]);
 
   const postedEntries = journalEntries.filter(
     (entry) => entry.status === "POSTED",

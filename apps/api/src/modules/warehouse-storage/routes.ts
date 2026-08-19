@@ -34,7 +34,7 @@ export async function warehouseStorageRoutes(
           requirePermission(
             request,
             reply,
-            "organization.view",
+            "warehouse.view",
           ),
       ],
     },
@@ -72,7 +72,7 @@ export async function warehouseStorageRoutes(
           requirePermission(
             request,
             reply,
-            "organization.create",
+            "warehouse.create",
           ),
       ],
     },
@@ -172,6 +172,150 @@ export async function warehouseStorageRoutes(
     },
   );
 
+
+  app.put(
+    "/api/warehouse-zones/:id",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "warehouse.update"),
+      ],
+    },
+    async (request, reply) => {
+      const claims = request.user as AuthClaims;
+      const { id } = request.params as { id: string };
+      const body = request.body as {
+        code?: string;
+        name?: string;
+        active?: boolean;
+      };
+
+      const zone = await prisma.warehouseZone.findFirst({
+        where: {
+          id,
+          tenantId: claims.tenantId,
+        },
+        include: {
+          warehouse: true,
+          bins: true,
+        },
+      });
+
+      if (!zone) {
+        return reply.code(404).send({
+          errors: [{ code: "NOT_FOUND", message: "Warehouse zone not found" }],
+        });
+      }
+
+      if (body.code && body.code !== zone.code) {
+        const duplicate = await prisma.warehouseZone.findFirst({
+          where: {
+            tenantId: claims.tenantId,
+            warehouseId: zone.warehouseId,
+            code: body.code,
+            NOT: { id },
+          },
+        });
+
+        if (duplicate) {
+          return reply.code(409).send({
+            errors: [{
+              code: "DUPLICATE_ERROR",
+              message: "Zone code already exists in this warehouse",
+            }],
+          });
+        }
+      }
+
+      const updated = await prisma.warehouseZone.update({
+        where: { id },
+        data: {
+          ...(body.code !== undefined ? { code: body.code } : {}),
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.active !== undefined ? { active: body.active } : {}),
+        },
+        include: {
+          warehouse: true,
+          bins: true,
+        },
+      });
+
+      await writeAuditEvent(prisma, {
+        tenantId: claims.tenantId,
+        actorUserId: claims.sub,
+        action: "UPDATE",
+        entityType: "WarehouseZone",
+        entityId: id,
+        previousState: zone,
+        newState: updated,
+      });
+
+      return { data: updated };
+    },
+  );
+
+  app.delete(
+    "/api/warehouse-zones/:id",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "warehouse.delete"),
+      ],
+    },
+    async (request, reply) => {
+      const claims = request.user as AuthClaims;
+      const { id } = request.params as { id: string };
+
+      const zone = await prisma.warehouseZone.findFirst({
+        where: {
+          id,
+          tenantId: claims.tenantId,
+        },
+        include: {
+          bins: true,
+        },
+      });
+
+      if (!zone) {
+        return reply.code(404).send({
+          errors: [{ code: "NOT_FOUND", message: "Warehouse zone not found" }],
+        });
+      }
+
+      if (zone.bins.length > 0) {
+        return reply.code(409).send({
+          errors: [{
+            code: "CONFLICT",
+            message: "Cannot delete a zone containing bins",
+          }],
+        });
+      }
+
+      await prisma.warehouseZone.delete({
+        where: { id },
+      });
+
+      await writeAuditEvent(prisma, {
+        tenantId: claims.tenantId,
+        actorUserId: claims.sub,
+        action: "DELETE",
+        entityType: "WarehouseZone",
+        entityId: id,
+        previousState: zone,
+      });
+
+      return {
+        data: {
+          id,
+          deleted: true,
+        },
+      };
+    },
+  );
+
+
   // ---------------------------------------------------------
   // BINS
   // ---------------------------------------------------------
@@ -188,7 +332,7 @@ export async function warehouseStorageRoutes(
           requirePermission(
             request,
             reply,
-            "organization.view",
+            "warehouse.view",
           ),
       ],
     },
@@ -229,7 +373,7 @@ export async function warehouseStorageRoutes(
           requirePermission(
             request,
             reply,
-            "organization.create",
+            "warehouse.create",
           ),
       ],
     },
@@ -331,4 +475,160 @@ export async function warehouseStorageRoutes(
       });
     },
   );
+
+  app.put(
+    "/api/warehouse-bins/:id",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "warehouse.update"),
+      ],
+    },
+    async (request, reply) => {
+      const claims = request.user as AuthClaims;
+      const { id } = request.params as { id: string };
+      const body = request.body as {
+        code?: string;
+        name?: string;
+        active?: boolean;
+      };
+
+      const bin = await prisma.warehouseBin.findFirst({
+        where: {
+          id,
+          tenantId: claims.tenantId,
+        },
+        include: {
+          zone: {
+            include: {
+              warehouse: true,
+            },
+          },
+        },
+      });
+
+      if (!bin) {
+        return reply.code(404).send({
+          errors: [{ code: "NOT_FOUND", message: "Warehouse bin not found" }],
+        });
+      }
+
+      if (body.code && body.code !== bin.code) {
+        const duplicate = await prisma.warehouseBin.findFirst({
+          where: {
+            tenantId: claims.tenantId,
+            zoneId: bin.zoneId,
+            code: body.code,
+            NOT: { id },
+          },
+        });
+
+        if (duplicate) {
+          return reply.code(409).send({
+            errors: [{
+              code: "DUPLICATE_ERROR",
+              message: "Bin code already exists in this zone",
+            }],
+          });
+        }
+      }
+
+      const updated = await prisma.warehouseBin.update({
+        where: { id },
+        data: {
+          ...(body.code !== undefined ? { code: body.code } : {}),
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.active !== undefined ? { active: body.active } : {}),
+        },
+        include: {
+          zone: {
+            include: {
+              warehouse: true,
+            },
+          },
+        },
+      });
+
+      await writeAuditEvent(prisma, {
+        tenantId: claims.tenantId,
+        actorUserId: claims.sub,
+        action: "UPDATE",
+        entityType: "WarehouseBin",
+        entityId: id,
+        previousState: bin,
+        newState: updated,
+      });
+
+      return { data: updated };
+    },
+  );
+
+  app.delete(
+    "/api/warehouse-bins/:id",
+    {
+      preHandler: [
+        authenticate,
+        async (request: FastifyRequest, reply: FastifyReply) =>
+          requirePermission(request, reply, "warehouse.delete"),
+      ],
+    },
+    async (request, reply) => {
+      const claims = request.user as AuthClaims;
+      const { id } = request.params as { id: string };
+
+      const bin = await prisma.warehouseBin.findFirst({
+        where: {
+          id,
+          tenantId: claims.tenantId,
+        },
+        include: {
+          zone: true,
+        },
+      });
+
+      if (!bin) {
+        return reply.code(404).send({
+          errors: [{ code: "NOT_FOUND", message: "Warehouse bin not found" }],
+        });
+      }
+
+      const stockReferences = await prisma.stockBalance.count({
+        where: {
+          tenantId: claims.tenantId,
+          binId: id,
+        },
+      });
+
+      if (stockReferences > 0) {
+        return reply.code(409).send({
+          errors: [{
+            code: "CONFLICT",
+            message: "Cannot delete a bin referenced by stock balances",
+          }],
+        });
+      }
+
+      await prisma.warehouseBin.delete({
+        where: { id },
+      });
+
+      await writeAuditEvent(prisma, {
+        tenantId: claims.tenantId,
+        actorUserId: claims.sub,
+        action: "DELETE",
+        entityType: "WarehouseBin",
+        entityId: id,
+        previousState: bin,
+      });
+
+      return {
+        data: {
+          id,
+          deleted: true,
+        },
+      };
+    },
+  );
+
 }

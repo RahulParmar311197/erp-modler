@@ -1,7 +1,7 @@
 import path from "node:path";
 import dotenv from "dotenv";
 
-const envPath = path.resolve(process.cwd(), "../../.env");
+const envPath = path.resolve(process.cwd(), ".env");
 dotenv.config({ path: envPath });
 
 console.log("Seed environment:", envPath);
@@ -166,6 +166,17 @@ async function main() {
     "organization.create",
     "organization.update",
     "organization.delete",
+    "location.view",
+    "location.create",
+    "location.update",
+    "location.delete",
+    "warehouse.view",
+    "warehouse.create",
+    "warehouse.update",
+    "warehouse.delete",
+    "stock.view",
+    "stock.update",
+
     "user.view",
     "user.create",
     "user.update",

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 
 type Organization = {
@@ -82,7 +82,7 @@ export function AdministrationPage({
     string[]
   >([]);
 
-  async function loadAdministration() {
+  const loadAdministration = useCallback(async () => {
     if (!token) return;
 
     setLoading(true);
@@ -126,11 +126,11 @@ export function AdministrationPage({
     } finally {
       setLoading(false);
     }
-  }
+  }, [token]);
 
   useEffect(() => {
     void loadAdministration();
-  }, [token]);
+  }, [loadAdministration]);
 
   const activeUsers = useMemo(
     () => users.filter((user) => user.status === "ACTIVE").length,

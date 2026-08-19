@@ -34,7 +34,7 @@ export async function stockRoutes(
           requirePermission(
             request,
             reply,
-            "organization.view",
+            "stock.view",
           ),
       ],
     },
@@ -300,7 +300,7 @@ export async function stockRoutes(
           requirePermission(
             request,
             reply,
-            "organization.update",
+            "stock.update",
           ),
       ],
     },
@@ -499,7 +499,7 @@ export async function stockRoutes(
           requirePermission(
             request,
             reply,
-            "organization.view",
+            "stock.view",
           ),
       ],
     },
@@ -543,7 +543,7 @@ export async function stockRoutes(
           requirePermission(
             request,
             reply,
-            "organization.update",
+            "stock.update",
           ),
       ],
     },
@@ -967,7 +967,7 @@ export async function stockRoutes(
           requirePermission(
             request,
             reply,
-            "user.view",
+            "stock.view",
           ),
       ],
     },

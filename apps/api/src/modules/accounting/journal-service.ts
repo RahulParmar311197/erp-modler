@@ -1,7 +1,8 @@
 import type { PrismaClient } from "../../../../../packages/database/generated/prisma/client";
 
 type JournalLineInput = {
-  accountCode: string;
+  accountId?: string;
+  accountCode?: string;
   description?: string;
   debit: number;
   credit: number;
@@ -46,28 +47,65 @@ export async function postJournalEntry(
     );
   }
 
-  const accountCodes = [...new Set(input.lines.map((line) => line.accountCode))];
+  for (const line of input.lines) {
+    if (!line.accountId && !line.accountCode) {
+      throw new Error(
+        "Every journal line requires accountId or accountCode",
+      );
+    }
+  }
+
+  const accountIds = [
+    ...new Set(
+      input.lines
+        .map((line) => line.accountId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+
+  const accountCodes = [
+    ...new Set(
+      input.lines
+        .map((line) => line.accountCode)
+        .filter((code): code is string => Boolean(code)),
+    ),
+  ];
 
   const accounts = await prisma.glAccount.findMany({
     where: {
       tenantId: input.tenantId,
-      code: {
-        in: accountCodes,
-      },
       active: true,
+      OR: [
+        ...(accountIds.length > 0
+          ? [{ id: { in: accountIds } }]
+          : []),
+        ...(accountCodes.length > 0
+          ? [{ code: { in: accountCodes } }]
+          : []),
+      ],
     },
   });
 
-  const accountMap = new Map(
+  const accountMapById = new Map(
+    accounts.map((account) => [account.id, account]),
+  );
+
+  const accountMapByCode = new Map(
     accounts.map((account) => [account.code, account]),
   );
 
-  for (const code of accountCodes) {
-    const account = accountMap.get(code);
+  for (const line of input.lines) {
+    const account = line.accountId
+      ? accountMapById.get(line.accountId)
+      : line.accountCode
+        ? accountMapByCode.get(line.accountCode)
+        : undefined;
 
     if (!account) {
       throw new Error(
-        `GL account ${code} does not exist or is inactive`,
+        `GL account ${
+          line.accountId ?? line.accountCode ?? "unknown"
+        } does not exist or is inactive`,
       );
     }
 
@@ -76,7 +114,7 @@ export async function postJournalEntry(
       account.organizationId !== input.organizationId
     ) {
       throw new Error(
-        `GL account ${code} does not belong to the journal organization`,
+        `GL account ${account.code} does not belong to the journal organization`,
       );
     }
   }
@@ -94,13 +132,29 @@ export async function postJournalEntry(
       accountingPeriodId: input.accountingPeriodId ?? null,
       status: "POSTED",
       lines: {
-        create: input.lines.map((line) => ({
-          tenantId: input.tenantId,
-          accountId: accountMap.get(line.accountCode)!.id,
-          description: line.description ?? null,
-          debit: line.debit,
-          credit: line.credit,
-        })),
+        create: input.lines.map((line) => {
+          const account = line.accountId
+            ? accountMapById.get(line.accountId)
+            : line.accountCode
+              ? accountMapByCode.get(line.accountCode)
+              : undefined;
+
+          if (!account) {
+            throw new Error(
+              `GL account ${
+                line.accountId ?? line.accountCode ?? "unknown"
+              } does not exist or is inactive`,
+            );
+          }
+
+          return {
+            tenantId: input.tenantId,
+            accountId: account.id,
+            description: line.description ?? null,
+            debit: line.debit,
+            credit: line.credit,
+          };
+        }),
       },
     },
     include: {

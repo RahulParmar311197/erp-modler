@@ -8,46 +8,48 @@ datasource db {
 }
 
 model Tenant {
-  id                String             @id @default(uuid())
-  code              String             @unique
-  name              String
-  status            TenantStatus       @default(ACTIVE)
-  defaultCurrency   String             @default("USD")
-  timezone          String             @default("UTC")
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  auditEvents       AuditEvent[]
-  customers         Customer[]
-  customerPayments  CustomerPayment[]
-  glAccounts        GlAccount[]
-  glAccountGroups   GlAccountGroup[]
-  journalEntries    JournalEntry[]
-  journalLines      JournalLine[]
-  goodsReceipts     GoodsReceipt[]
-  items             Item[]
-  itemGroups        ItemGroup[]
-  locations         Location[]
-  organizations     Organization[]
-  purchaseOrders    PurchaseOrder[]
-  roles             Role[]
-  salesInvoices     SalesInvoice[]
-  salesOrders       SalesOrder[]
-  shipments         Shipment[]
-  stockBalances     StockBalance[]
-  stockMovements    StockMovement[]
-  suppliers         Supplier[]
-  unitOfMeasures    UnitOfMeasure[]
-  users             User[]
-  vendorBills       VendorBill[]
-  vendorPayments    VendorPayment[]
-  warehouses        Warehouse[]
-  warehouseBins     WarehouseBin[]
-  warehouseZones    WarehouseZone[]
-  fiscalYears       FiscalYear[]
-  accountingPeriods AccountingPeriod[]
-  voucherTypes      VoucherType[]
-  vouchers          Voucher[]
-  voucherLines      VoucherLine[]
+  id                  String               @id @default(uuid())
+  code                String               @unique
+  name                String
+  status              TenantStatus         @default(ACTIVE)
+  defaultCurrency     String               @default("USD")
+  timezone            String               @default("UTC")
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  auditEvents         AuditEvent[]
+  customers           Customer[]
+  customerPayments    CustomerPayment[]
+  glAccounts          GlAccount[]
+  glAccountGroups     GlAccountGroup[]
+  journalEntries      JournalEntry[]
+  journalLines        JournalLine[]
+  goodsReceipts       GoodsReceipt[]
+  items               Item[]
+  itemGroups          ItemGroup[]
+  locations           Location[]
+  organizations       Organization[]
+  purchaseOrders      PurchaseOrder[]
+  roles               Role[]
+  salesInvoices       SalesInvoice[]
+  salesOrders         SalesOrder[]
+  shipments           Shipment[]
+  stockBalances       StockBalance[]
+  stockMovements      StockMovement[]
+  suppliers           Supplier[]
+  unitOfMeasures      UnitOfMeasure[]
+  users               User[]
+  vendorBills         VendorBill[]
+  vendorPayments      VendorPayment[]
+  warehouses          Warehouse[]
+  warehouseBins       WarehouseBin[]
+  warehouseZones      WarehouseZone[]
+  fiscalYears         FiscalYear[]
+  accountingPeriods   AccountingPeriod[]
+  voucherTypes        VoucherType[]
+  vouchers            Voucher[]
+  voucherLines        VoucherLine[]
+  bankAccounts        BankAccount[]
+  bankReconciliations BankReconciliation[]
 }
 
 model Organization {
@@ -76,6 +78,7 @@ model Organization {
   users          User[]
   vendorBills    VendorBill[]
   warehouses     Warehouse[]
+  bankAccounts   BankAccount[]
 
   @@unique([tenantId, code])
   @@index([tenantId, parentId])
@@ -636,6 +639,7 @@ model GlAccount {
   group          GlAccountGroup? @relation(fields: [groupId], references: [id])
   journalLines   JournalLine[]
   voucherLines   VoucherLine[]
+  bankAccounts   BankAccount[]
 
   @@unique([tenantId, code])
   @@index([tenantId, type])
@@ -686,6 +690,68 @@ model JournalLine {
 
   @@index([tenantId, journalEntryId])
   @@index([tenantId, accountId])
+}
+
+enum BankAccountType {
+  BANK
+  CASH
+}
+
+enum BankReconciliationStatus {
+  DRAFT
+  RECONCILED
+}
+
+model BankAccount {
+  id             String          @id @default(uuid())
+  tenantId       String
+  organizationId String
+  glAccountId    String
+  code           String
+  name           String
+  accountType    BankAccountType
+  bankName       String?
+  accountNumber  String?
+  ifscCode       String?
+  branchName     String?
+  currency       String          @default("INR")
+  openingBalance Decimal         @default(0)
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  tenant          Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  organization    Organization         @relation(fields: [organizationId], references: [id])
+  glAccount       GlAccount            @relation(fields: [glAccountId], references: [id])
+  reconciliations BankReconciliation[]
+  vendorPayments  VendorPayment[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, organizationId])
+  @@index([tenantId, glAccountId])
+  @@index([tenantId, accountType])
+}
+
+model BankReconciliation {
+  id               String                   @id @default(uuid())
+  tenantId         String
+  bankAccountId    String
+  statementDate    DateTime
+  statementRef     String?
+  statementBalance Decimal
+  reconciledAt     DateTime?
+  reconciledBy     String?
+  status           BankReconciliationStatus @default(DRAFT)
+  notes            String?
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bankAccount BankAccount @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, bankAccountId])
+  @@index([tenantId, statementDate])
+  @@index([tenantId, status])
 }
 
 model Customer {
@@ -768,23 +834,27 @@ model VendorBillLine {
 }
 
 model VendorPayment {
-  id            String     @id @default(uuid())
+  id            String      @id @default(uuid())
   tenantId      String
   supplierId    String
   vendorBillId  String
+  bankAccountId String
   paymentNumber String
-  paymentDate   DateTime   @default(now())
+  paymentDate   DateTime    @default(now())
   amount        Decimal
-  currency      String     @default("INR")
+  currency      String      @default("INR")
   notes         String?
-  createdAt     DateTime   @default(now())
-  supplier      Supplier   @relation(fields: [supplierId], references: [id])
-  tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  vendorBill    VendorBill @relation(fields: [vendorBillId], references: [id], onDelete: Cascade)
+  createdAt     DateTime    @default(now())
+
+  supplier      Supplier    @relation(fields: [supplierId], references: [id])
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vendorBill    VendorBill  @relation(fields: [vendorBillId], references: [id], onDelete: Cascade)
+  bankAccount   BankAccount @relation(fields: [bankAccountId], references: [id])
 
   @@unique([tenantId, paymentNumber])
   @@index([tenantId, supplierId])
   @@index([tenantId, vendorBillId])
+  @@index([tenantId, bankAccountId])
 }
 
 model SalesOrder {

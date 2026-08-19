@@ -1001,15 +1001,29 @@ describe("Accounting GL workflows", () => {
         },
       });
 
+      const suffix = Date.now();
+
+      const existingPeriods = await prisma.accountingPeriod.findMany({
+        where: { fiscalYearId: fiscalYear.id },
+        select: { periodNumber: true },
+      });
+      const usedPeriodNumbers = new Set(
+        existingPeriods.map((period) => period.periodNumber),
+      );
+      let periodNumber = 1;
+      while (usedPeriodNumbers.has(periodNumber)) {
+        periodNumber += 1;
+      }
+
       const period = await prisma.accountingPeriod.create({
         data: {
           tenantId: tenant.id,
           fiscalYearId: fiscalYear.id,
-          periodNumber: 99,
-          code: `CONCURRENT-CLOSE-${Date.now()}`,
+          periodNumber,
+          code: `CONCURRENT-CLOSE-${suffix}`,
           name: "Concurrent close test",
-          startDate: new Date("2026-08-25T00:00:00.000Z"),
-          endDate: new Date("2026-08-26T00:00:00.000Z"),
+          startDate: new Date(`2026-08-${20 + (suffix % 5)}T00:00:00.000Z`),
+          endDate: new Date(`2026-08-${21 + (suffix % 5)}T00:00:00.000Z`),
         },
       });
 
@@ -1106,6 +1120,158 @@ describe("Accounting GL workflows", () => {
       expect(closed.status).toBe("CLOSED");
       expect(closed.closedAt).toBeDefined();
       expect(closed.closedBy).toBeDefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("allows only one concurrent creation of the same fiscal year code", async () => {
+    const app = await buildApp();
+
+    try {
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          tenantCode: "MODLER",
+          email: "admin@modler.local",
+          password: "ModlerAdmin@2026!",
+        },
+      });
+
+      expect(login.statusCode).toBe(200);
+
+      const headers = {
+        authorization: `Bearer ${login.json().data.token}`,
+      };
+
+      const suffix = `${Date.now()}-${process.pid}-${Math.random()
+        .toString(36)
+        .slice(2, 10)}`;
+      const testYear = 2400 + Math.floor(Math.random() * 500);
+      const code = `CONCURRENT-CREATE-FY-${suffix}`;
+
+      const [first, second] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: "/api/accounting/fiscal-years",
+          headers,
+          payload: {
+            code,
+            name: `Concurrent fiscal year ${suffix}`,
+            startDate: `${testYear}-01-01`,
+            endDate: `${testYear}-12-31`,
+          },
+        }),
+        app.inject({
+          method: "POST",
+          url: "/api/accounting/fiscal-years",
+          headers,
+          payload: {
+            code,
+            name: `Concurrent fiscal year ${suffix}`,
+            startDate: `${testYear}-01-01`,
+            endDate: `${testYear}-12-31`,
+          },
+        }),
+      ]);
+
+      const statuses = [first.statusCode, second.statusCode].sort();
+
+      expect(statuses).toEqual([201, 409]);
+
+      const created = await prisma.fiscalYear.findMany({
+        where: {
+          code,
+        },
+      });
+
+      expect(created).toHaveLength(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("allows only one concurrent creation of the same accounting period", async () => {
+    const app = await buildApp();
+
+    try {
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          tenantCode: "MODLER",
+          email: "admin@modler.local",
+          password: "ModlerAdmin@2026!",
+        },
+      });
+
+      expect(login.statusCode).toBe(200);
+
+      const headers = {
+        authorization: `Bearer ${login.json().data.token}`,
+      };
+
+      const tenant = await prisma.tenant.findUniqueOrThrow({
+        where: {
+          code: "MODLER",
+        },
+      });
+
+      const suffix = `${Date.now()}-${process.pid}-${Math.random()
+        .toString(36)
+        .slice(2, 10)}`;
+      const testYear = 2200 + (Date.now() % 100);
+
+      const fiscalYear = await prisma.fiscalYear.create({
+        data: {
+          tenantId: tenant.id,
+          code: `CONCURRENT-PERIOD-FY-${suffix}`,
+          name: `Concurrent period fiscal year ${suffix}`,
+          startDate: new Date(`${testYear}-01-01T00:00:00.000Z`),
+          endDate: new Date(`${testYear}-12-31T00:00:00.000Z`),
+        },
+      });
+
+      const payload = {
+        fiscalYearId: fiscalYear.id,
+        periodNumber: 1,
+        code: `CONCURRENT-CREATE-PERIOD-${suffix}`,
+        name: `Concurrent period ${suffix}`,
+        startDate: `${testYear}-01-01`,
+        endDate: `${testYear}-01-31`,
+      };
+
+      const [first, second] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: "/api/accounting/periods",
+          headers,
+          payload,
+        }),
+        app.inject({
+          method: "POST",
+          url: "/api/accounting/periods",
+          headers,
+          payload,
+        }),
+      ]);
+
+      const statuses = [first.statusCode, second.statusCode].sort();
+
+      expect(statuses).toEqual([201, 409]);
+
+      const created = await prisma.accountingPeriod.findMany({
+        where: {
+          tenantId: tenant.id,
+          fiscalYearId: fiscalYear.id,
+          periodNumber: payload.periodNumber,
+          code: payload.code,
+        },
+      });
+
+      expect(created).toHaveLength(1);
+      expect(created[0].code).toBe(payload.code);
     } finally {
       await app.close();
     }

@@ -39,6 +39,7 @@ const navigation = [
       { id: "general-ledger", label: "General Ledger" },
       { id: "journal-entries", label: "Journal Entries" },
       { id: "balance-sheet", label: "Balance Sheet" },
+      { id: "banking", label: "Banking" },
     ],
   },
   {

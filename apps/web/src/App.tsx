@@ -11,6 +11,7 @@ import { AdministrationPage } from "./pages/AdministrationPage";
 import { ReceivablesPage } from "./pages/ReceivablesPage";
 import { PayablesPage } from "./pages/PayablesPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { BankingPage } from "./pages/BankingPage";
 
 const API = "";
 
@@ -295,10 +296,6 @@ function App() {
     return () => {
       cancelled = true;
     };
-    // Initial application bootstrap intentionally runs once.
-    // loadData also reads form-selection state, so including it here
-    // would cause the bootstrap request to rerun unnecessarily.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
 
@@ -350,6 +347,11 @@ function App() {
     >
       <main className="app">
         {error && <div className="error-banner">{error}</div>}
+
+
+      {activeModule === "banking" && (
+        <BankingPage token={token} />
+      )}
 
       {activeModule === "dashboard" && (
         <DashboardPage
@@ -439,6 +441,7 @@ function App() {
         activeModule !== "general-ledger" &&
         activeModule !== "journal-entries" &&
         activeModule !== "balance-sheet" &&
+        activeModule !== "banking" &&
         activeModule !== "administration" &&
         activeModule !== "payables" &&
         activeModule !== "receivables" && (

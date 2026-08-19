@@ -875,3 +875,154 @@ td small {
     grid-template-columns: 1fr;
   }
 }
+
+/* =========================================================
+   TALLY STYLE ERP DOCUMENT FLOW
+   ========================================================= */
+
+.document-flow {
+  margin: 18px 0 24px;
+  padding: 18px;
+  border: 1px solid var(--border, #d9dee7);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+}
+
+.document-flow-track {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.document-flow-item {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.document-flow-step {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 7px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.document-flow-step:disabled {
+  cursor: default;
+}
+
+.document-flow-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border-radius: 50%;
+  border: 1px solid #cbd2dc;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.document-flow-step.done .document-flow-icon {
+  background: #166534;
+  border-color: #166534;
+  color: #fff;
+}
+
+.document-flow-step.current .document-flow-icon {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+
+.document-flow-step.pending .document-flow-icon {
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.document-flow-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.document-flow-label strong {
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.document-flow-label small {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.document-flow-line {
+  height: 2px;
+  flex: 1;
+  min-width: 18px;
+  margin: 0 5px;
+  background: #dbe1e8;
+}
+
+.document-flow-line.completed {
+  background: #166534;
+}
+
+.transaction-reference {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.transaction-reference-card {
+  padding: 11px 13px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.transaction-reference-card span {
+  display: block;
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.transaction-reference-card strong {
+  font-size: 13px;
+}
+
+@media (max-width: 850px) {
+  .document-flow-track {
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+
+  .document-flow-item {
+    flex: 0 0 auto;
+  }
+
+  .document-flow-line {
+    min-width: 30px;
+  }
+
+  .transaction-reference {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

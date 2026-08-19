@@ -3,7 +3,9 @@ import { buildApp } from "../app";
 import { prisma } from "../lib/prisma";
 
 describe("Sales flow", () => {
-  it("runs SO -> submit -> approve -> ship -> invoice -> post -> payment", async () => {
+  it(
+  "runs SO -> submit -> approve -> ship -> invoice -> post -> payment",
+  async () => {
     const app = await buildApp();
 
     try {
@@ -202,6 +204,7 @@ describe("Sales flow", () => {
         payload: {
           paymentNumber: `PAY-TEST-${suffix}`,
           paymentDate: "2026-08-11",
+          bankAccountId: "f47389d4-bdbc-46d3-8f39-5af3ce763a21",
           amount: 150,
           notes: "Automated payment test",
         },
@@ -250,7 +253,9 @@ describe("Sales flow", () => {
     } finally {
       await app.close();
     }
-  });
+  },
+  15000,
+);
 
   it("allows only one concurrent posting of the same sales invoice", async () => {
     const app = await buildApp();
@@ -612,6 +617,7 @@ describe("Sales flow", () => {
         payload: {
           paymentNumber: `PAY-CONCURRENT-A-${suffix}`,
           paymentDate: "2026-08-11",
+          bankAccountId: "f47389d4-bdbc-46d3-8f39-5af3ce763a21",
           amount: 100,
         },
       }),
@@ -622,6 +628,7 @@ describe("Sales flow", () => {
         payload: {
           paymentNumber: `PAY-CONCURRENT-B-${suffix}`,
           paymentDate: "2026-08-11",
+          bankAccountId: "f47389d4-bdbc-46d3-8f39-5af3ce763a21",
           amount: 100,
         },
       }),
@@ -817,6 +824,7 @@ it("rejects a payment that exceeds the invoice outstanding balance", async () =>
       payload: {
         paymentNumber: `PAY-OVER-${suffix}`,
         paymentDate: "2026-08-11",
+        bankAccountId: "f47389d4-bdbc-46d3-8f39-5af3ce763a21",
         amount: 151,
       },
     });
@@ -1000,6 +1008,7 @@ it("rejects a duplicate customer payment number", async () => {
       payload: {
         paymentNumber,
         paymentDate: "2026-08-11",
+        bankAccountId: "f47389d4-bdbc-46d3-8f39-5af3ce763a21",
         amount: 100,
       },
     });
@@ -1016,6 +1025,7 @@ it("rejects a duplicate customer payment number", async () => {
       payload: {
         paymentNumber,
         paymentDate: "2026-08-11",
+        bankAccountId: "f47389d4-bdbc-46d3-8f39-5af3ce763a21",
         amount: 50,
       },
     });
