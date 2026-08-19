@@ -1148,7 +1148,29 @@ describe("Accounting GL workflows", () => {
       const suffix = `${Date.now()}-${process.pid}-${Math.random()
         .toString(36)
         .slice(2, 10)}`;
-      const testYear = 2400 + Math.floor(Math.random() * 500);
+
+      const tenant = await prisma.tenant.findUniqueOrThrow({
+        where: { code: "MODLER" },
+      });
+
+      let testYear = 2500;
+
+      while (
+        await prisma.fiscalYear.findFirst({
+          where: {
+            tenantId: tenant.id,
+            startDate: {
+              lt: new Date(`${testYear}-12-31T00:00:00.000Z`),
+            },
+            endDate: {
+              gt: new Date(`${testYear}-01-01T00:00:00.000Z`),
+            },
+          },
+        })
+      ) {
+        testYear++;
+      }
+
       const code = `CONCURRENT-CREATE-FY-${suffix}`;
 
       const [first, second] = await Promise.all([
